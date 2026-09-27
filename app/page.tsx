@@ -10,7 +10,7 @@ import {
 } from 'lucide-react';
 import { db, MoodRecord, PhotoData, PhotoTag } from '@/lib/db';
 
-const APP_VERSION = 'Ver. 001.001.000';
+const APP_VERSION = 'Ver. 001.002.000';
 
 const MOODS: { level: 1 | 2 | 3 | 4 | 5; label: string; icon: any; color: string }[] = [
   { level: 5, label: '雀躍', icon: Laugh, color: 'text-amber-500 hover:bg-amber-50' },
@@ -21,11 +21,16 @@ const MOODS: { level: 1 | 2 | 3 | 4 | 5; label: string; icon: any; color: string
 ];
 
 export default function MindLogPage() {
+  const todayStr = new Date().toISOString().split('T')[0];
+
   const [selectedMood, setSelectedMood] = useState<1 | 2 | 3 | 4 | 5>(3);
   const [note, setNote] = useState('');
   const [stagedPhoto, setStagedPhoto] = useState<PhotoData | null>(null);
   const [tempTagCaption, setTempTagCaption] = useState('');
   const [pendingTagPos, setPendingTagPos] = useState<{ x: number; y: number } | null>(null);
+
+  // 📅 新增/編輯所指定的記錄日期（支援補登過去日期）
+  const [targetRecordDate, setTargetRecordDate] = useState<string>(todayStr);
 
   // 📝 編輯狀態管理
   const [editingRecordId, setEditingRecordId] = useState<number | null>(null);
@@ -87,17 +92,20 @@ export default function MindLogPage() {
     setTempTagCaption('');
   };
 
-  // 4. 提交或更新日記 (支援新增與編輯兩種模式)
+  // 4. 提交或更新日記 (支援指定過去/自訂日期)
   const handleSubmit = async () => {
     if (!note.trim() && !stagedPhoto) return;
 
     const moodObj = MOODS.find(m => m.level === selectedMood)!;
-    const now = new Date();
-    const dateStr = now.toISOString().split('T')[0];
+    
+    // 依據指定的日期產生時間戳記與顯示字串
+    const assignedDate = new Date(`${targetRecordDate}T12:00:00`);
+    const dateStr = targetRecordDate;
 
     if (editingRecordId) {
       // ✏️ 更新既有記事
       await db.records.update(editingRecordId, {
+        dateStr,
         moodLevel: selectedMood,
         moodLabel: moodObj.label,
         note: note.trim(),
@@ -106,15 +114,15 @@ export default function MindLogPage() {
       });
       setEditingRecordId(null);
     } else {
-      // ➕ 新增記事
+      // ➕ 新增記事 (支援補登過去日期)
       const newRecord: MoodRecord = {
-        timestamp: Date.now(),
+        timestamp: assignedDate.getTime(),
         dateStr,
         moodLevel: selectedMood,
         moodLabel: moodObj.label,
         note: note.trim(),
         photos: stagedPhoto ? [stagedPhoto] : [],
-        createdAt: now.toLocaleDateString('zh-TW', { month: '2-digit', day: '2-digit', weekday: 'short' }),
+        createdAt: assignedDate.toLocaleDateString('zh-TW', { month: '2-digit', day: '2-digit', weekday: 'short' }),
         appVersion: APP_VERSION
       };
       await db.records.add(newRecord);
@@ -124,6 +132,7 @@ export default function MindLogPage() {
     setNote('');
     setStagedPhoto(null);
     setPendingTagPos(null);
+    setTargetRecordDate(filterDate || todayStr);
   };
 
   // 5. 載入記事進入編輯模式
@@ -131,6 +140,7 @@ export default function MindLogPage() {
     setEditingRecordId(record.id!);
     setSelectedMood(record.moodLevel);
     setNote(record.note);
+    setTargetRecordDate(record.dateStr);
 
     if (record.photos && record.photos.length > 0) {
       const p = record.photos[0];
@@ -142,7 +152,6 @@ export default function MindLogPage() {
       setStagedPhoto(null);
     }
 
-    // 捲動至頂端編輯區以利手機操作
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
@@ -152,11 +161,12 @@ export default function MindLogPage() {
     setNote('');
     setStagedPhoto(null);
     setPendingTagPos(null);
+    setTargetRecordDate(filterDate || todayStr);
   };
 
   // 7. 刪除記事 (含防誤觸二次確認)
   const handleDelete = async (record: MoodRecord) => {
-    if (window.confirm(`確定要刪除 ${record.createdAt} 的這篇心情隨筆嗎？\n此動作無法復原。`)) {
+    if (window.confirm(`確定要刪除 ${record.dateStr} 的這篇心情隨筆嗎？\n此動作無法復原。`)) {
       if (record.id) {
         await db.records.delete(record.id);
         if (editingRecordId === record.id) {
@@ -166,11 +176,15 @@ export default function MindLogPage() {
     }
   };
 
-  // 8. 日期快速導覽 (前一天 / 後一天)
+  // 8. 右側時間軸日期快速導覽 (前一天 / 後一天)
   const handleShiftDate = (days: number) => {
     const baseDate = filterDate ? new Date(filterDate) : new Date();
     baseDate.setDate(baseDate.getDate() + days);
-    setFilterDate(baseDate.toISOString().split('T')[0]);
+    const newDateStr = baseDate.toISOString().split('T')[0];
+    setFilterDate(newDateStr);
+    if (!editingRecordId) {
+      setTargetRecordDate(newDateStr);
+    }
   };
 
   return (
@@ -194,7 +208,7 @@ export default function MindLogPage() {
           {editingRecordId && (
             <div className="mb-4 bg-amber-100 border border-amber-300 text-amber-900 px-3 py-1.5 rounded-xl flex items-center justify-between text-xs">
               <span className="font-semibold flex items-center gap-1">
-                <Edit3 className="w-3.5 h-3.5 text-amber-600" /> 正在編輯隨筆
+                <Edit3 className="w-3.5 h-3.5 text-amber-600" /> 正在編輯 {targetRecordDate} 的記事
               </span>
               <button 
                 onClick={handleCancelEdit}
@@ -206,9 +220,36 @@ export default function MindLogPage() {
             </div>
           )}
 
+          {/* 📅 指定記錄/補登日期 */}
+          <div className="mb-4">
+            <div className="flex items-center justify-between mb-1.5">
+              <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
+                記錄日期 (可補登過去時間)
+              </label>
+              {targetRecordDate !== todayStr && (
+                <button
+                  type="button"
+                  onClick={() => setTargetRecordDate(todayStr)}
+                  className="text-[11px] text-blue-600 hover:underline"
+                >
+                  切換為今天
+                </button>
+              )}
+            </div>
+            <div className="flex items-center gap-2 bg-slate-50 p-2 rounded-xl border border-slate-200">
+              <CalendarIcon className="w-4 h-4 text-blue-500 ml-1" />
+              <input
+                type="date"
+                value={targetRecordDate}
+                onChange={(e) => setTargetRecordDate(e.target.value)}
+                className="bg-transparent text-xs font-semibold text-slate-800 outline-none w-full cursor-pointer"
+              />
+            </div>
+          </div>
+
           {/* 心情刻度選擇器 */}
           <div className="mb-4">
-            <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider block mb-2">當前心情</label>
+            <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider block mb-2">當日心情</label>
             <div className="grid grid-cols-5 gap-1.5 bg-slate-50 p-1.5 rounded-xl border border-slate-200">
               {MOODS.map((m) => {
                 const IconComponent = m.icon;
@@ -238,7 +279,7 @@ export default function MindLogPage() {
             {!stagedPhoto ? (
               <label className="flex flex-col items-center justify-center border-2 border-dashed border-slate-300 rounded-xl p-4 cursor-pointer hover:border-blue-400 bg-slate-50 transition-colors">
                 <Camera className="w-6 h-6 text-slate-400 mb-1" />
-                <span className="text-xs text-slate-500">點擊拍照或選取照片</span>
+                <span className="text-xs text-slate-500">拍照或選取照片</span>
                 <input 
                   type="file" 
                   accept="image/*" 
@@ -270,7 +311,7 @@ export default function MindLogPage() {
                     </div>
                   ))}
                   <div className="absolute inset-0 bg-black/20 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white text-xs font-medium pointer-events-none">
-                    點擊照片任意處釘選心情氣泡
+                    點擊照片釘選心情氣泡
                   </div>
                 </div>
 
@@ -308,7 +349,7 @@ export default function MindLogPage() {
           <div className="mb-4">
             <textarea
               rows={3}
-              placeholder="此刻的心情隨筆..."
+              placeholder="記錄該日的心情隨筆..."
               value={note}
               onChange={(e) => setNote(e.target.value)}
               className="w-full text-sm border border-slate-200 rounded-xl p-3 outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 resize-none"
@@ -338,7 +379,7 @@ export default function MindLogPage() {
                 </>
               ) : (
                 <>
-                  <Send className="w-4 h-4" /> 記錄此刻
+                  <Send className="w-4 h-4" /> 儲存至 {targetRecordDate}
                 </>
               )}
             </button>
@@ -347,7 +388,7 @@ export default function MindLogPage() {
 
         {/* 底部狀態列 */}
         <div className="pt-4 border-t border-slate-100 flex items-center justify-between text-xs text-slate-400">
-          <span>離線優先儲存 (IndexedDB v2)</span>
+          <span>支援回溯歷史記錄</span>
           <span className="font-mono">{APP_VERSION}</span>
         </div>
       </aside>
@@ -371,7 +412,13 @@ export default function MindLogPage() {
               <input
                 type="date"
                 value={filterDate}
-                onChange={(e) => setFilterDate(e.target.value)}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  setFilterDate(val);
+                  if (val && !editingRecordId) {
+                    setTargetRecordDate(val);
+                  }
+                }}
                 className="text-xs font-semibold text-slate-700 border border-slate-200 rounded-lg px-2 py-1 outline-none focus:border-blue-500"
               />
             </div>
@@ -387,9 +434,12 @@ export default function MindLogPage() {
 
           <div className="flex items-center gap-2 w-full sm:w-auto justify-end text-xs">
             <button
-              onClick={() => setFilterDate(new Date().toISOString().split('T')[0])}
+              onClick={() => {
+                setFilterDate(todayStr);
+                if (!editingRecordId) setTargetRecordDate(todayStr);
+              }}
               className={`px-2.5 py-1 rounded-lg border transition ${
-                filterDate === new Date().toISOString().split('T')[0]
+                filterDate === todayStr
                   ? 'bg-blue-50 text-blue-600 border-blue-200 font-semibold'
                   : 'border-slate-200 text-slate-600 hover:bg-slate-50'
               }`}
@@ -442,7 +492,9 @@ export default function MindLogPage() {
                   
                   {/* 右上角：日期標籤與操作工具 (編輯/刪除) */}
                   <div className="flex items-center gap-2">
-                    <span className="text-xs text-slate-400">{record.createdAt}</span>
+                    <span className="text-xs font-medium text-slate-500 bg-slate-100 px-2 py-0.5 rounded">
+                      {record.dateStr}
+                    </span>
                     <button
                       onClick={() => handleStartEdit(record)}
                       className="p-1 rounded text-slate-400 hover:text-amber-600 hover:bg-amber-50 transition"
@@ -490,7 +542,7 @@ export default function MindLogPage() {
 
                 <div className="mt-3 pt-2 border-t border-slate-100 flex items-center justify-between text-[11px] text-slate-400">
                   <span>
-                    {new Date(record.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                    紀錄歸檔日期：{record.dateStr}
                     {record.updatedAt && ' (已編輯)'}
                   </span>
                   <span className="font-mono text-[10px] text-slate-300">{record.appVersion}</span>
