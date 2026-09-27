@@ -1,0 +1,21 @@
+{
+  "name": "MindLog - 隨筆與照片心情日記",
+  "short_name": "MindLog",
+  "description": "隨時記錄心情與照片標籤的離線優先 PWA",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#F8FAFC",
+  "theme_color": "#3B82F6",
+  "icons": [
+    {
+      "src": "/icons/icon-192x192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "/icons/icon-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}
