@@ -1,16 +1,23 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import imageCompression from 'browser-image-compression';
 import { 
   Smile, Frown, Meh, Laugh, Angry, 
   Camera, MapPin, Send, Trash2, Calendar as CalendarIcon, 
-  Clock, Edit3, X, ChevronLeft, ChevronRight, RotateCcw, Check
+  Clock, Edit3, X, ChevronLeft, ChevronRight, RotateCcw, Check,
+  Upload, Image as ImageIcon
 } from 'lucide-react';
 import { db, MoodRecord, PhotoData, PhotoTag } from '@/lib/db';
 
-const APP_VERSION = 'Ver. 001.002.000';
+const APP_VERSION = 'Ver. 001.003.000';
+const DEFAULT_TITLE = 'MindLog';
+
+interface HeaderConfig {
+  title: string;
+  avatarUrl: string | null; // 使用者上傳的圖片 base64 / blob URL
+}
 
 const MOODS: { level: 1 | 2 | 3 | 4 | 5; label: string; icon: any; color: string }[] = [
   { level: 5, label: '雀躍', icon: Laugh, color: 'text-amber-500 hover:bg-amber-50' },
@@ -23,22 +30,46 @@ const MOODS: { level: 1 | 2 | 3 | 4 | 5; label: string; icon: any; color: string
 export default function MindLogPage() {
   const todayStr = new Date().toISOString().split('T')[0];
 
+  // 🌿 標題與使用者自訂頭像 (localStorage 持久化)
+  const [headerConfig, setHeaderConfig] = useState<HeaderConfig>({
+    title: DEFAULT_TITLE,
+    avatarUrl: null
+  });
+  const [isEditingHeader, setIsEditingHeader] = useState(false);
+  const [tempTitle, setTempTitle] = useState(DEFAULT_TITLE);
+  const [tempAvatar, setTempAvatar] = useState<string | null>(null);
+  const headerFileRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    const saved = localStorage.getItem('mindlog_header_config');
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        setHeaderConfig(parsed);
+        setTempTitle(parsed.title || DEFAULT_TITLE);
+        setTempAvatar(parsed.avatarUrl || null);
+      } catch (e) {
+        console.error('讀取標題設定失敗:', e);
+      }
+    }
+  }, []);
+
   const [selectedMood, setSelectedMood] = useState<1 | 2 | 3 | 4 | 5>(3);
   const [note, setNote] = useState('');
   const [stagedPhoto, setStagedPhoto] = useState<PhotoData | null>(null);
   const [tempTagCaption, setTempTagCaption] = useState('');
   const [pendingTagPos, setPendingTagPos] = useState<{ x: number; y: number } | null>(null);
 
-  // 📅 新增/編輯所指定的記錄日期（支援補登過去日期）
+  // 📅 指定記錄日期
   const [targetRecordDate, setTargetRecordDate] = useState<string>(todayStr);
 
   // 📝 編輯狀態管理
   const [editingRecordId, setEditingRecordId] = useState<number | null>(null);
 
-  // 📅 日期過濾狀態管理 (空字串代表顯示全部)
+  // 📅 日期過濾狀態管理
   const [filterDate, setFilterDate] = useState<string>('');
 
-  // 即時讀取本機日記串流 (支援指定日期查詢與全量排序)
+  // 即時讀取日記列表
   const entries = useLiveQuery(async () => {
     if (filterDate) {
       return db.records.where('dateStr').equals(filterDate).reverse().sortBy('timestamp');
@@ -46,7 +77,44 @@ export default function MindLogPage() {
     return db.records.orderBy('timestamp').reverse().toArray();
   }, [filterDate]);
 
-  // 1. 照片壓縮與預覽
+  // 1. 使用者自訂標題頭像上傳處理 (壓縮至小於 100KB 的 base64 存入 localStorage)
+  const handleAvatarUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    try {
+      const options = { maxSizeMB: 0.1, maxWidthOrHeight: 256, useWebWorker: true };
+      const compressedBlob = await imageCompression(file, options);
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        setTempAvatar(reader.result as string);
+      };
+      reader.readAsDataURL(compressedBlob);
+    } catch (err) {
+      console.error('標題圖片壓縮失敗:', err);
+    }
+  };
+
+  const saveHeaderConfig = () => {
+    const updated: HeaderConfig = {
+      title: tempTitle.trim() || DEFAULT_TITLE,
+      avatarUrl: tempAvatar
+    };
+    setHeaderConfig(updated);
+    localStorage.setItem('mindlog_header_config', JSON.stringify(updated));
+    setIsEditingHeader(false);
+  };
+
+  const resetHeaderConfig = () => {
+    const def: HeaderConfig = { title: DEFAULT_TITLE, avatarUrl: null };
+    setHeaderConfig(def);
+    setTempTitle(DEFAULT_TITLE);
+    setTempAvatar(null);
+    localStorage.removeItem('mindlog_header_config');
+    setIsEditingHeader(false);
+  };
+
+  // 2. 照片壓縮與預覽
   const handlePhotoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -67,7 +135,7 @@ export default function MindLogPage() {
     }
   };
 
-  // 2. 點擊相片觸發釘選心情標籤
+  // 3. 點擊相片觸發釘選心情標籤
   const handleImageClick = (e: React.MouseEvent<HTMLDivElement>) => {
     const rect = e.currentTarget.getBoundingClientRect();
     const xPercent = ((e.clientX - rect.left) / rect.width) * 100;
@@ -75,7 +143,7 @@ export default function MindLogPage() {
     setPendingTagPos({ x: xPercent, y: yPercent });
   };
 
-  // 3. 儲存照片標籤
+  // 4. 儲存照片標籤
   const addTagToPhoto = () => {
     if (!stagedPhoto || !pendingTagPos || !tempTagCaption.trim()) return;
     const newTag: PhotoTag = {
@@ -92,18 +160,15 @@ export default function MindLogPage() {
     setTempTagCaption('');
   };
 
-  // 4. 提交或更新日記 (支援指定過去/自訂日期)
+  // 5. 提交或更新日記
   const handleSubmit = async () => {
     if (!note.trim() && !stagedPhoto) return;
 
     const moodObj = MOODS.find(m => m.level === selectedMood)!;
-    
-    // 依據指定的日期產生時間戳記與顯示字串
     const assignedDate = new Date(`${targetRecordDate}T12:00:00`);
     const dateStr = targetRecordDate;
 
     if (editingRecordId) {
-      // ✏️ 更新既有記事
       await db.records.update(editingRecordId, {
         dateStr,
         moodLevel: selectedMood,
@@ -114,7 +179,6 @@ export default function MindLogPage() {
       });
       setEditingRecordId(null);
     } else {
-      // ➕ 新增記事 (支援補登過去日期)
       const newRecord: MoodRecord = {
         timestamp: assignedDate.getTime(),
         dateStr,
@@ -128,14 +192,13 @@ export default function MindLogPage() {
       await db.records.add(newRecord);
     }
 
-    // 重設表單狀態
     setNote('');
     setStagedPhoto(null);
     setPendingTagPos(null);
     setTargetRecordDate(filterDate || todayStr);
   };
 
-  // 5. 載入記事進入編輯模式
+  // 6. 載入編輯
   const handleStartEdit = (record: MoodRecord) => {
     setEditingRecordId(record.id!);
     setSelectedMood(record.moodLevel);
@@ -155,7 +218,6 @@ export default function MindLogPage() {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
-  // 6. 取消編輯
   const handleCancelEdit = () => {
     setEditingRecordId(null);
     setNote('');
@@ -164,7 +226,6 @@ export default function MindLogPage() {
     setTargetRecordDate(filterDate || todayStr);
   };
 
-  // 7. 刪除記事 (含防誤觸二次確認)
   const handleDelete = async (record: MoodRecord) => {
     if (window.confirm(`確定要刪除 ${record.dateStr} 的這篇心情隨筆嗎？\n此動作無法復原。`)) {
       if (record.id) {
@@ -176,7 +237,6 @@ export default function MindLogPage() {
     }
   };
 
-  // 8. 右側時間軸日期快速導覽 (前一天 / 後一天)
   const handleShiftDate = (days: number) => {
     const baseDate = filterDate ? new Date(filterDate) : new Date();
     baseDate.setDate(baseDate.getDate() + days);
@@ -195,13 +255,110 @@ export default function MindLogPage() {
         editingRecordId ? 'ring-2 ring-amber-400/80 bg-amber-50/10' : ''
       }`}>
         <div>
-          <div className="flex items-center justify-between mb-4">
-            <h1 className="text-xl font-bold tracking-tight text-slate-900 flex items-center gap-2">
-              🌿 <span>MindLog</span>
-            </h1>
-            <span className="text-xs font-mono bg-blue-50 text-blue-600 px-2 py-0.5 rounded border border-blue-200">
-              {APP_VERSION}
-            </span>
+          {/* 🏷️ 自訂標題與上傳相片區塊 */}
+          <div className="mb-5 pb-3 border-b border-slate-100">
+            {!isEditingHeader ? (
+              <div className="flex items-center justify-between group">
+                <div 
+                  onClick={() => setIsEditingHeader(true)}
+                  className="flex items-center gap-3 cursor-pointer select-none"
+                  title="點擊自訂標題與圖示"
+                >
+                  {headerConfig.avatarUrl ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img 
+                      src={headerConfig.avatarUrl} 
+                      alt="頭像" 
+                      className="w-9 h-9 rounded-xl object-cover border border-slate-200 shadow-sm"
+                    />
+                  ) : (
+                    <div className="w-9 h-9 rounded-xl bg-emerald-100 text-emerald-700 flex items-center justify-center font-bold text-lg shadow-sm">
+                      🌿
+                    </div>
+                  )}
+                  <div>
+                    <h1 className="text-lg font-bold tracking-tight text-slate-900 group-hover:text-blue-600 transition flex items-center gap-1.5">
+                      {headerConfig.title}
+                      <Edit3 className="w-3 h-3 text-slate-400 opacity-0 group-hover:opacity-100 transition-opacity" />
+                    </h1>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div className="bg-slate-50 p-3 rounded-2xl border border-slate-200 space-y-3">
+                <div className="text-xs font-semibold text-slate-500">自訂 App 標題與照片</div>
+                
+                {/* 使用者相片預覽與上傳按鈕 */}
+                <div className="flex items-center gap-3">
+                  {tempAvatar ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img 
+                      src={tempAvatar} 
+                      alt="預覽頭像" 
+                      className="w-12 h-12 rounded-xl object-cover border-2 border-blue-500 shadow" 
+                    />
+                  ) : (
+                    <div className="w-12 h-12 rounded-xl bg-slate-200 flex items-center justify-center text-slate-400 border border-dashed border-slate-300">
+                      <ImageIcon className="w-5 h-5" />
+                    </div>
+                  )}
+
+                  <div>
+                    <button
+                      type="button"
+                      onClick={() => headerFileRef.current?.click()}
+                      className="text-xs bg-white border border-slate-300 text-slate-700 hover:bg-slate-50 px-2.5 py-1.5 rounded-lg flex items-center gap-1 font-medium shadow-sm"
+                    >
+                      <Upload className="w-3.5 h-3.5 text-blue-600" />
+                      上傳相片
+                    </button>
+                    <input 
+                      ref={headerFileRef}
+                      type="file" 
+                      accept="image/*" 
+                      className="hidden" 
+                      onChange={handleAvatarUpload}
+                    />
+                  </div>
+                </div>
+
+                {/* 標題文字輸入 */}
+                <input 
+                  type="text"
+                  maxLength={15}
+                  value={tempTitle}
+                  onChange={(e) => setTempTitle(e.target.value)}
+                  placeholder="輸入標題 (例如：小晴的隨筆)"
+                  className="w-full text-xs border border-slate-300 rounded-lg px-2.5 py-1.5 outline-none focus:border-blue-500 bg-white"
+                />
+
+                <div className="flex items-center justify-between pt-1">
+                  <button 
+                    type="button" 
+                    onClick={resetHeaderConfig}
+                    className="text-[11px] text-slate-400 hover:text-rose-500"
+                  >
+                    恢復預設
+                  </button>
+                  <div className="flex gap-1.5">
+                    <button 
+                      type="button" 
+                      onClick={() => setIsEditingHeader(false)}
+                      className="text-xs px-2.5 py-1 text-slate-500 hover:bg-slate-200 rounded-lg"
+                    >
+                      取消
+                    </button>
+                    <button 
+                      type="button" 
+                      onClick={saveHeaderConfig}
+                      className="text-xs bg-blue-600 text-white font-medium px-3 py-1 rounded-lg shadow-sm hover:bg-blue-700"
+                    >
+                      儲存
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
 
           {/* 編輯中提示條 */}
@@ -386,179 +543,183 @@ export default function MindLogPage() {
           </div>
         </div>
 
-        {/* 底部狀態列 */}
+        {/* 🔻 底部狀態列：版本號已移至此處最底端 */}
         <div className="pt-4 border-t border-slate-100 flex items-center justify-between text-xs text-slate-400">
-          <span>支援回溯歷史記錄</span>
+          <span>離線優先 (IndexedDB v2)</span>
           <span className="font-mono">{APP_VERSION}</span>
         </div>
       </aside>
 
       {/* ──────────────── 右側主內容：心情時間軸與日期過濾 ──────────────── */}
-      <main className="flex-1 max-w-2xl mx-auto w-full p-4 md:p-8">
-        
-        {/* 📅 指定日期過濾工具列 */}
-        <div className="bg-white rounded-2xl p-3.5 border border-slate-200/90 shadow-sm mb-6 flex flex-col sm:flex-row items-center justify-between gap-3">
-          <div className="flex items-center gap-2 w-full sm:w-auto justify-between sm:justify-start">
-            <button
-              onClick={() => handleShiftDate(-1)}
-              className="p-1.5 rounded-lg border border-slate-200 hover:bg-slate-50 text-slate-600"
-              title="前一天"
-            >
-              <ChevronLeft className="w-4 h-4" />
-            </button>
+      <main className="flex-1 max-w-2xl mx-auto w-full p-4 md:p-8 flex flex-col justify-between">
+        <div>
+          {/* 📅 指定日期過濾工具列 */}
+          <div className="bg-white rounded-2xl p-3.5 border border-slate-200/90 shadow-sm mb-6 flex flex-col sm:flex-row items-center justify-between gap-3">
+            <div className="flex items-center gap-2 w-full sm:w-auto justify-between sm:justify-start">
+              <button
+                onClick={() => handleShiftDate(-1)}
+                className="p-1.5 rounded-lg border border-slate-200 hover:bg-slate-50 text-slate-600"
+                title="前一天"
+              >
+                <ChevronLeft className="w-4 h-4" />
+              </button>
 
-            <div className="flex items-center gap-1.5">
-              <CalendarIcon className="w-4 h-4 text-blue-600" />
-              <input
-                type="date"
-                value={filterDate}
-                onChange={(e) => {
-                  const val = e.target.value;
-                  setFilterDate(val);
-                  if (val && !editingRecordId) {
-                    setTargetRecordDate(val);
-                  }
-                }}
-                className="text-xs font-semibold text-slate-700 border border-slate-200 rounded-lg px-2 py-1 outline-none focus:border-blue-500"
-              />
+              <div className="flex items-center gap-1.5">
+                <CalendarIcon className="w-4 h-4 text-blue-600" />
+                <input
+                  type="date"
+                  value={filterDate}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setFilterDate(val);
+                    if (val && !editingRecordId) {
+                      setTargetRecordDate(val);
+                    }
+                  }}
+                  className="text-xs font-semibold text-slate-700 border border-slate-200 rounded-lg px-2 py-1 outline-none focus:border-blue-500"
+                />
+              </div>
+
+              <button
+                onClick={() => handleShiftDate(1)}
+                className="p-1.5 rounded-lg border border-slate-200 hover:bg-slate-50 text-slate-600"
+                title="後一天"
+              >
+                <ChevronRight className="w-4 h-4" />
+              </button>
             </div>
 
-            <button
-              onClick={() => handleShiftDate(1)}
-              className="p-1.5 rounded-lg border border-slate-200 hover:bg-slate-50 text-slate-600"
-              title="後一天"
-            >
-              <ChevronRight className="w-4 h-4" />
-            </button>
-          </div>
-
-          <div className="flex items-center gap-2 w-full sm:w-auto justify-end text-xs">
-            <button
-              onClick={() => {
-                setFilterDate(todayStr);
-                if (!editingRecordId) setTargetRecordDate(todayStr);
-              }}
-              className={`px-2.5 py-1 rounded-lg border transition ${
-                filterDate === todayStr
-                  ? 'bg-blue-50 text-blue-600 border-blue-200 font-semibold'
-                  : 'border-slate-200 text-slate-600 hover:bg-slate-50'
-              }`}
-            >
-              今天
-            </button>
-            <button
-              onClick={() => setFilterDate('')}
-              className={`px-2.5 py-1 rounded-lg border transition flex items-center gap-1 ${
-                !filterDate
-                  ? 'bg-blue-600 text-white border-blue-600 font-semibold shadow-sm'
-                  : 'border-slate-200 text-slate-600 hover:bg-slate-50'
-              }`}
-            >
-              <RotateCcw className="w-3 h-3" /> 顯示全部
-            </button>
-          </div>
-        </div>
-
-        {/* 標題與筆數狀態 */}
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="text-base font-bold text-slate-900 flex items-center gap-2">
-            <Clock className="w-4 h-4 text-slate-500" /> 
-            {filterDate ? `指定日期：${filterDate}` : '完整時間軸'}
-          </h2>
-          <span className="text-xs text-slate-400">共 {entries?.length || 0} 篇記錄</span>
-        </div>
-
-        {/* 日記清單 */}
-        <div className="space-y-4">
-          {entries?.map((record) => {
-            const mood = MOODS.find(m => m.level === record.moodLevel);
-            const Icon = mood?.icon || Meh;
-            const isEditing = editingRecordId === record.id;
-
-            return (
-              <article 
-                key={record.id} 
-                className={`bg-white rounded-2xl p-4 border transition-all shadow-sm ${
-                  isEditing ? 'border-amber-400 ring-2 ring-amber-400/20' : 'border-slate-200/80'
+            <div className="flex items-center gap-2 w-full sm:w-auto justify-end text-xs">
+              <button
+                onClick={() => {
+                  setFilterDate(todayStr);
+                  if (!editingRecordId) setTargetRecordDate(todayStr);
+                }}
+                className={`px-2.5 py-1 rounded-lg border transition ${
+                  filterDate === todayStr
+                    ? 'bg-blue-50 text-blue-600 border-blue-200 font-semibold'
+                    : 'border-slate-200 text-slate-600 hover:bg-slate-50'
                 }`}
               >
-                <div className="flex items-center justify-between mb-3">
-                  <div className="flex items-center gap-2">
-                    <div className={`p-1.5 rounded-lg bg-slate-50 ${mood?.color.split(' ')[0]}`}>
-                      <Icon className="w-4 h-4" />
-                    </div>
-                    <span className="text-sm font-semibold text-slate-800">{record.moodLabel}</span>
-                  </div>
-                  
-                  {/* 右上角：日期標籤與操作工具 (編輯/刪除) */}
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs font-medium text-slate-500 bg-slate-100 px-2 py-0.5 rounded">
-                      {record.dateStr}
-                    </span>
-                    <button
-                      onClick={() => handleStartEdit(record)}
-                      className="p-1 rounded text-slate-400 hover:text-amber-600 hover:bg-amber-50 transition"
-                      title="編輯此記事"
-                    >
-                      <Edit3 className="w-3.5 h-3.5" />
-                    </button>
-                    <button
-                      onClick={() => handleDelete(record)}
-                      className="p-1 rounded text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition"
-                      title="刪除此記事"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
-                </div>
-
-                {/* 相片與照片上的心情釘選氣泡 */}
-                {record.photos && record.photos.length > 0 && record.photos[0].blob && (
-                  <div className="relative rounded-xl overflow-hidden mb-3 border border-slate-100 bg-slate-950">
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img
-                      src={URL.createObjectURL(record.photos[0].blob)}
-                      alt="記錄照片"
-                      className="w-full max-h-96 object-cover"
-                    />
-                    {record.photos[0].tags?.map((tag) => (
-                      <div
-                        key={tag.id}
-                        style={{ top: `${tag.yPercent}%`, left: `${tag.xPercent}%` }}
-                        className="absolute -translate-x-1/2 -translate-y-1/2 bg-black/70 backdrop-blur-md text-white text-xs px-2.5 py-1 rounded-full shadow-lg border border-white/20 flex items-center gap-1.5"
-                      >
-                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                        {tag.caption}
-                      </div>
-                    ))}
-                  </div>
-                )}
-
-                {record.note && (
-                  <p className="text-sm text-slate-700 leading-relaxed whitespace-pre-line">
-                    {record.note}
-                  </p>
-                )}
-
-                <div className="mt-3 pt-2 border-t border-slate-100 flex items-center justify-between text-[11px] text-slate-400">
-                  <span>
-                    紀錄歸檔日期：{record.dateStr}
-                    {record.updatedAt && ' (已編輯)'}
-                  </span>
-                  <span className="font-mono text-[10px] text-slate-300">{record.appVersion}</span>
-                </div>
-              </article>
-            );
-          })}
-
-          {(!entries || entries.length === 0) && (
-            <div className="text-center py-16 text-slate-400 border border-dashed rounded-2xl bg-white/50">
-              <CalendarIcon className="w-8 h-8 mx-auto mb-2 opacity-40" />
-              <p className="text-sm">
-                {filterDate ? `${filterDate} 尚無任何心情記錄` : '尚無心情紀錄，隨時拍下第一張照片吧！'}
-              </p>
+                今天
+              </button>
+              <button
+                onClick={() => setFilterDate('')}
+                className={`px-2.5 py-1 rounded-lg border transition flex items-center gap-1 ${
+                  !filterDate
+                    ? 'bg-blue-600 text-white border-blue-600 font-semibold shadow-sm'
+                    : 'border-slate-200 text-slate-600 hover:bg-slate-50'
+                }`}
+              >
+                <RotateCcw className="w-3 h-3" /> 顯示全部
+              </button>
             </div>
-          )}
+          </div>
+
+          {/* 標題與筆數狀態 */}
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-base font-bold text-slate-900 flex items-center gap-2">
+              <Clock className="w-4 h-4 text-slate-500" /> 
+              {filterDate ? `指定日期：${filterDate}` : '完整時間軸'}
+            </h2>
+            <span className="text-xs text-slate-400">共 {entries?.length || 0} 篇記錄</span>
+          </div>
+
+          {/* 日記清單 */}
+          <div className="space-y-4">
+            {entries?.map((record) => {
+              const mood = MOODS.find(m => m.level === record.moodLevel);
+              const Icon = mood?.icon || Meh;
+              const isEditing = editingRecordId === record.id;
+
+              return (
+                <article 
+                  key={record.id} 
+                  className={`bg-white rounded-2xl p-4 border transition-all shadow-sm ${
+                    isEditing ? 'border-amber-400 ring-2 ring-amber-400/20' : 'border-slate-200/80'
+                  }`}
+                >
+                  <div className="flex items-center justify-between mb-3">
+                    <div className="flex items-center gap-2">
+                      <div className={`p-1.5 rounded-lg bg-slate-50 ${mood?.color.split(' ')[0]}`}>
+                        <Icon className="w-4 h-4" />
+                      </div>
+                      <span className="text-sm font-semibold text-slate-800">{record.moodLabel}</span>
+                    </div>
+                    
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-medium text-slate-500 bg-slate-100 px-2 py-0.5 rounded">
+                        {record.dateStr}
+                      </span>
+                      <button
+                        onClick={() => handleStartEdit(record)}
+                        className="p-1 rounded text-slate-400 hover:text-amber-600 hover:bg-amber-50 transition"
+                        title="編輯此記事"
+                      >
+                        <Edit3 className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        onClick={() => handleDelete(record)}
+                        className="p-1 rounded text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition"
+                        title="刪除此記事"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </div>
+
+                  {record.photos && record.photos.length > 0 && record.photos[0].blob && (
+                    <div className="relative rounded-xl overflow-hidden mb-3 border border-slate-100 bg-slate-950">
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={URL.createObjectURL(record.photos[0].blob)}
+                        alt="記錄照片"
+                        className="w-full max-h-96 object-cover"
+                      />
+                      {record.photos[0].tags?.map((tag) => (
+                        <div
+                          key={tag.id}
+                          style={{ top: `${tag.yPercent}%`, left: `${tag.xPercent}%` }}
+                          className="absolute -translate-x-1/2 -translate-y-1/2 bg-black/70 backdrop-blur-md text-white text-xs px-2.5 py-1 rounded-full shadow-lg border border-white/20 flex items-center gap-1.5"
+                        >
+                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                          {tag.caption}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {record.note && (
+                    <p className="text-sm text-slate-700 leading-relaxed whitespace-pre-line">
+                      {record.note}
+                    </p>
+                  )}
+
+                  <div className="mt-3 pt-2 border-t border-slate-100 flex items-center justify-between text-[11px] text-slate-400">
+                    <span>
+                      紀錄歸檔：{record.dateStr}
+                      {record.updatedAt && ' (已編輯)'}
+                    </span>
+                    <span className="font-mono text-[10px] text-slate-300">{record.appVersion}</span>
+                  </div>
+                </article>
+              );
+            })}
+
+            {(!entries || entries.length === 0) && (
+              <div className="text-center py-16 text-slate-400 border border-dashed rounded-2xl bg-white/50">
+                <CalendarIcon className="w-8 h-8 mx-auto mb-2 opacity-40" />
+                <p className="text-sm">
+                  {filterDate ? `${filterDate} 尚無任何心情記錄` : '尚無心情紀錄，隨時拍下第一張照片吧！'}
+                </p>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* 🔻 手機版/主時間軸頁尾版本標示 */}
+        <div className="mt-12 text-center text-xs text-slate-400 font-mono">
+          MindLog PWA · {APP_VERSION}
         </div>
       </main>
     </div>
