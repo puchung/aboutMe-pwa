@@ -7,12 +7,12 @@ import {
   Smile, Frown, Meh, Laugh, Angry, 
   Camera, MapPin, Send, Trash2, Calendar as CalendarIcon, 
   Clock, Edit3, X, ChevronLeft, ChevronRight, RotateCcw, Check,
-  Upload, Image as ImageIcon, Cloud, CloudOff, RefreshCw
+  Upload, Image as ImageIcon, Cloud, CloudOff, RefreshCw, ChevronUp, ChevronDown
 } from 'lucide-react';
 import { db, MoodRecord, PhotoData, PhotoTag } from '@/lib/db';
 import { supabase } from '@/lib/supabase';
 
-const APP_VERSION = 'Ver. 001.004.000';
+const APP_VERSION = 'Ver. 001.005.000';
 const DEFAULT_TITLE = 'MindLog';
 const SYNC_ROW_ID = 'user_mindlog_store';
 
@@ -29,7 +29,6 @@ const MOODS: { level: 1 | 2 | 3 | 4 | 5; label: string; icon: any; color: string
   { level: 1, label: '低落', icon: Angry, color: 'text-rose-500 hover:bg-rose-50' },
 ];
 
-// 將 Blob 轉為 Base64 以供 Supabase 雲端備份
 const blobToBase64 = (blob: Blob): Promise<string> => {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -39,7 +38,6 @@ const blobToBase64 = (blob: Blob): Promise<string> => {
   });
 };
 
-// 將 Base64 還原為 Blob 供本地 IndexedDB 儲存
 const base64ToBlob = (base64: string): Blob => {
   const parts = base64.split(';base64,');
   const contentType = parts[0].split(':')[1];
@@ -65,7 +63,10 @@ export default function MindLogPage() {
   const [tempAvatar, setTempAvatar] = useState<string | null>(null);
   const headerFileRef = useRef<HTMLInputElement>(null);
 
-  // ☁️ 雲端同步狀態 ('synced' | 'syncing' | 'error')
+  // 📱 行動端底部編輯器展開/收折 (在 PC 版預設全展開)
+  const [isDrawerOpen, setIsDrawerOpen] = useState(false);
+
+  // ☁️ 雲端同步狀態
   const [syncStatus, setSyncStatus] = useState<'synced' | 'syncing' | 'error'>('synced');
 
   const [selectedMood, setSelectedMood] = useState<1 | 2 | 3 | 4 | 5>(3);
@@ -91,8 +92,7 @@ export default function MindLogPage() {
     return db.records.orderBy('timestamp').reverse().toArray();
   }, [filterDate]);
 
-  // ──────────────── 雲端同步邏輯 ────────────────
-  // 1. 頁面載入時：從 Supabase 雲端下載最新資料並與本機覆蓋同步
+  // 1. 初次載入與 Supabase 同步
   useEffect(() => {
     const pullFromCloud = async () => {
       try {
@@ -110,7 +110,6 @@ export default function MindLogPage() {
         }
 
         if (data) {
-          // 同步標題與頭像
           if (data.settings) {
             setHeaderConfig(data.settings);
             setTempTitle(data.settings.title || DEFAULT_TITLE);
@@ -118,7 +117,6 @@ export default function MindLogPage() {
             localStorage.setItem('mindlog_header_config', JSON.stringify(data.settings));
           }
 
-          // 同步記事本與相片
           if (data.entries && Array.isArray(data.entries)) {
             const cloudRecords = data.entries;
             await db.records.clear();
@@ -151,7 +149,6 @@ export default function MindLogPage() {
       const curSettings = newSettings || headerConfig;
       const allLocalRecords = await db.records.toArray();
 
-      // 將所有圖檔 Blob 轉成可序列化的 Base64
       const serializableEntries = await Promise.all(
         allLocalRecords.map(async (rec) => {
           const serializedPhotos = await Promise.all(
@@ -162,10 +159,7 @@ export default function MindLogPage() {
               base64: p.blob ? await blobToBase64(p.blob) : null
             }))
           );
-          return {
-            ...rec,
-            photos: serializedPhotos
-          };
+          return { ...rec, photos: serializedPhotos };
         })
       );
 
@@ -184,7 +178,7 @@ export default function MindLogPage() {
     }
   };
 
-  // ──────────────── 頭像與標題處理 ────────────────
+  // 3. 頭像上傳與標題儲存
   const handleAvatarUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -193,9 +187,7 @@ export default function MindLogPage() {
       const options = { maxSizeMB: 0.08, maxWidthOrHeight: 256, useWebWorker: true };
       const compressedBlob = await imageCompression(file, options);
       const reader = new FileReader();
-      reader.onloadend = () => {
-        setTempAvatar(reader.result as string);
-      };
+      reader.onloadend = () => setTempAvatar(reader.result as string);
       reader.readAsDataURL(compressedBlob);
     } catch (err) {
       console.error('標題圖片壓縮失敗:', err);
@@ -223,7 +215,7 @@ export default function MindLogPage() {
     await pushToCloud(def);
   };
 
-  // ──────────────── 照片與標記處理 ────────────────
+  // 4. 照片與標記處理
   const handlePhotoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -239,6 +231,7 @@ export default function MindLogPage() {
         previewUrl,
         tags: []
       });
+      setIsDrawerOpen(true);
     } catch (err) {
       console.error('照片壓縮失敗:', err);
     }
@@ -267,7 +260,7 @@ export default function MindLogPage() {
     setTempTagCaption('');
   };
 
-  // ──────────────── 新增、編輯、刪除日記 ────────────────
+  // 5. 新增/更新日記
   const handleSubmit = async () => {
     if (!note.trim() && !stagedPhoto) return;
 
@@ -303,8 +296,8 @@ export default function MindLogPage() {
     setStagedPhoto(null);
     setPendingTagPos(null);
     setTargetRecordDate(filterDate || todayStr);
+    setIsDrawerOpen(false);
 
-    // 儲存完成後立即同步至 Supabase
     await pushToCloud();
   };
 
@@ -324,7 +317,9 @@ export default function MindLogPage() {
       setStagedPhoto(null);
     }
 
-    window.scrollTo({ top: 0, behavior: 'smooth' });
+    setIsDrawerOpen(true);
+    // 滾動至底部抽屜
+    window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
   };
 
   const handleCancelEdit = () => {
@@ -333,6 +328,7 @@ export default function MindLogPage() {
     setStagedPhoto(null);
     setPendingTagPos(null);
     setTargetRecordDate(filterDate || todayStr);
+    setIsDrawerOpen(false);
   };
 
   const handleDelete = async (record: MoodRecord) => {
@@ -360,173 +356,99 @@ export default function MindLogPage() {
   return (
     <div className="min-h-screen bg-slate-100 text-slate-800 flex flex-col md:flex-row font-sans">
       
-      {/* ──────────────── PC 左側固定側邊欄 / 速記區 ──────────────── */}
-      <aside className={`w-full md:w-96 bg-white border-r border-slate-200 p-5 flex flex-col justify-between shrink-0 shadow-sm md:h-screen md:sticky md:top-0 transition-all ${
+      {/* ──────────────── PC 版維持左側邊欄；手機版隱藏並移至吸底抽屜 ──────────────── */}
+      <aside className={`hidden md:flex w-96 bg-white border-r border-slate-200 p-5 flex-col justify-between shrink-0 shadow-sm h-screen sticky top-0 transition-all ${
         editingRecordId ? 'ring-2 ring-amber-400/80 bg-amber-50/10' : ''
       }`}>
         <div>
-          {/* 🏷️ 自訂標題、頭像與雲端同步狀態 */}
+          {/* PC 頂部標題 */}
           <div className="mb-5 pb-3 border-b border-slate-100 flex items-center justify-between">
             {!isEditingHeader ? (
               <div 
                 onClick={() => setIsEditingHeader(true)}
                 className="flex items-center gap-3 cursor-pointer select-none group flex-1"
-                title="點擊自訂標題與圖示 (自動雲端同步)"
+                title="點擊自訂標題與圖示"
               >
                 {headerConfig.avatarUrl ? (
                   // eslint-disable-next-line @next/next/no-img-element
-                  <img 
-                    src={headerConfig.avatarUrl} 
-                    alt="頭像" 
-                    className="w-9 h-9 rounded-xl object-cover border border-slate-200 shadow-sm"
-                  />
+                  <img src={headerConfig.avatarUrl} alt="頭像" className="w-9 h-9 rounded-xl object-cover border border-slate-200 shadow-sm" />
                 ) : (
-                  <div className="w-9 h-9 rounded-xl bg-emerald-100 text-emerald-700 flex items-center justify-center font-bold text-lg shadow-sm">
-                    🌿
-                  </div>
+                  <div className="w-9 h-9 rounded-xl bg-emerald-100 text-emerald-700 flex items-center justify-center font-bold text-lg shadow-sm">🌿</div>
                 )}
                 <div className="flex items-center gap-1.5">
-                  <h1 className="text-lg font-bold tracking-tight text-slate-900 group-hover:text-blue-600 transition">
-                    {headerConfig.title}
-                  </h1>
+                  <h1 className="text-lg font-bold tracking-tight text-slate-900 group-hover:text-blue-600 transition">{headerConfig.title}</h1>
                   <Edit3 className="w-3 h-3 text-slate-400 opacity-0 group-hover:opacity-100 transition-opacity" />
                 </div>
               </div>
             ) : (
               <div className="bg-slate-50 p-3 rounded-2xl border border-slate-200 space-y-3 w-full">
-                <div className="text-xs font-semibold text-slate-500">自訂 App 標題與照片 (跨端同步)</div>
+                <div className="text-xs font-semibold text-slate-500">自訂 App 標題與照片</div>
                 <div className="flex items-center gap-3">
                   {tempAvatar ? (
                     // eslint-disable-next-line @next/next/no-img-element
-                    <img 
-                      src={tempAvatar} 
-                      alt="預覽頭像" 
-                      className="w-12 h-12 rounded-xl object-cover border-2 border-blue-500 shadow" 
-                    />
+                    <img src={tempAvatar} alt="預覽頭像" className="w-12 h-12 rounded-xl object-cover border-2 border-blue-500 shadow" />
                   ) : (
                     <div className="w-12 h-12 rounded-xl bg-slate-200 flex items-center justify-center text-slate-400 border border-dashed border-slate-300">
                       <ImageIcon className="w-5 h-5" />
                     </div>
                   )}
-
                   <div>
                     <button
                       type="button"
                       onClick={() => headerFileRef.current?.click()}
                       className="text-xs bg-white border border-slate-300 text-slate-700 hover:bg-slate-50 px-2.5 py-1.5 rounded-lg flex items-center gap-1 font-medium shadow-sm"
                     >
-                      <Upload className="w-3.5 h-3.5 text-blue-600" />
-                      上傳相片
+                      <Upload className="w-3.5 h-3.5 text-blue-600" /> 上傳相片
                     </button>
-                    <input 
-                      ref={headerFileRef}
-                      type="file" 
-                      accept="image/*" 
-                      className="hidden" 
-                      onChange={handleAvatarUpload}
-                    />
+                    <input ref={headerFileRef} type="file" accept="image/*" className="hidden" onChange={handleAvatarUpload} />
                   </div>
                 </div>
-
                 <input 
-                  type="text"
-                  maxLength={15}
-                  value={tempTitle}
-                  onChange={(e) => setTempTitle(e.target.value)}
-                  placeholder="輸入標題 (例如：小晴的隨筆)"
-                  className="w-full text-xs border border-slate-300 rounded-lg px-2.5 py-1.5 outline-none focus:border-blue-500 bg-white"
+                  type="text" 
+                  maxLength={15} 
+                  value={tempTitle} 
+                  onChange={(e) => setTempTitle(e.target.value)} 
+                  placeholder="輸入標題" 
+                  className="w-full text-xs border border-slate-300 rounded-lg px-2.5 py-1.5 outline-none focus:border-blue-500 bg-white" 
                 />
-
                 <div className="flex items-center justify-between pt-1">
-                  <button 
-                    type="button" 
-                    onClick={resetHeaderConfig}
-                    className="text-[11px] text-slate-400 hover:text-rose-500"
-                  >
-                    恢復預設
-                  </button>
+                  <button type="button" onClick={resetHeaderConfig} className="text-[11px] text-slate-400 hover:text-rose-500">恢復預設</button>
                   <div className="flex gap-1.5">
-                    <button 
-                      type="button" 
-                      onClick={() => setIsEditingHeader(false)}
-                      className="text-xs px-2.5 py-1 text-slate-500 hover:bg-slate-200 rounded-lg"
-                    >
-                      取消
-                    </button>
-                    <button 
-                      type="button" 
-                      onClick={saveHeaderConfig}
-                      className="text-xs bg-blue-600 text-white font-medium px-3 py-1 rounded-lg shadow-sm hover:bg-blue-700"
-                    >
-                      儲存並同步
-                    </button>
+                    <button type="button" onClick={() => setIsEditingHeader(false)} className="text-xs px-2.5 py-1 text-slate-500 hover:bg-slate-200 rounded-lg">取消</button>
+                    <button type="button" onClick={saveHeaderConfig} className="text-xs bg-blue-600 text-white font-medium px-3 py-1 rounded-lg shadow-sm hover:bg-blue-700">儲存並同步</button>
                   </div>
                 </div>
               </div>
             )}
 
-            {/* ☁️ 雲端狀態燈 */}
             {!isEditingHeader && (
               <div className="flex items-center pl-2">
-                {syncStatus === 'syncing' && (
-                  <div title="正在同步至雲端..." className="p-1.5 rounded-lg bg-amber-50 text-amber-500">
-                    <RefreshCw className="w-4 h-4 animate-spin" />
-                  </div>
-                )}
-                {syncStatus === 'synced' && (
-                  <div title="☁️ 雲端已即時同步" className="p-1.5 rounded-lg bg-emerald-50 text-emerald-600">
-                    <Cloud className="w-4 h-4" />
-                  </div>
-                )}
-                {syncStatus === 'error' && (
-                  <div title="❌ 同步異常 (請確認網路或 Supabase)" className="p-1.5 rounded-lg bg-rose-50 text-rose-500">
-                    <CloudOff className="w-4 h-4" />
-                  </div>
-                )}
+                {syncStatus === 'syncing' && <div title="正在同步至雲端..." className="p-1.5 rounded-lg bg-amber-50 text-amber-500"><RefreshCw className="w-4 h-4 animate-spin" /></div>}
+                {syncStatus === 'synced' && <div title="☁️ 雲端已即時同步" className="p-1.5 rounded-lg bg-emerald-50 text-emerald-600"><Cloud className="w-4 h-4" /></div>}
+                {syncStatus === 'error' && <div title="❌ 同步異常" className="p-1.5 rounded-lg bg-rose-50 text-rose-500"><CloudOff className="w-4 h-4" /></div>}
               </div>
             )}
           </div>
 
-          {/* 編輯提示 */}
+          {/* 編輯指示條 */}
           {editingRecordId && (
             <div className="mb-4 bg-amber-100 border border-amber-300 text-amber-900 px-3 py-1.5 rounded-xl flex items-center justify-between text-xs">
-              <span className="font-semibold flex items-center gap-1">
-                <Edit3 className="w-3.5 h-3.5 text-amber-600" /> 正在編輯 {targetRecordDate} 的記事
-              </span>
-              <button 
-                onClick={handleCancelEdit}
-                className="text-amber-700 hover:text-amber-900 p-0.5"
-                title="取消編輯"
-              >
-                <X className="w-4 h-4" />
-              </button>
+              <span className="font-semibold flex items-center gap-1"><Edit3 className="w-3.5 h-3.5 text-amber-600" /> 正在編輯 {targetRecordDate} 的記事</span>
+              <button onClick={handleCancelEdit} className="text-amber-700 hover:text-amber-900 p-0.5"><X className="w-4 h-4" /></button>
             </div>
           )}
 
-          {/* 📅 指定記錄/補登日期 */}
+          {/* 記錄日期 */}
           <div className="mb-4">
             <div className="flex items-center justify-between mb-1.5">
-              <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
-                記錄日期 (可補登過去時間)
-              </label>
+              <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider">記錄日期</label>
               {targetRecordDate !== todayStr && (
-                <button
-                  type="button"
-                  onClick={() => setTargetRecordDate(todayStr)}
-                  className="text-[11px] text-blue-600 hover:underline"
-                >
-                  切換為今天
-                </button>
+                <button type="button" onClick={() => setTargetRecordDate(todayStr)} className="text-[11px] text-blue-600 hover:underline">切換為今天</button>
               )}
             </div>
             <div className="flex items-center gap-2 bg-slate-50 p-2 rounded-xl border border-slate-200">
               <CalendarIcon className="w-4 h-4 text-blue-500 ml-1" />
-              <input
-                type="date"
-                value={targetRecordDate}
-                onChange={(e) => setTargetRecordDate(e.target.value)}
-                className="bg-transparent text-xs font-semibold text-slate-800 outline-none w-full cursor-pointer"
-              />
+              <input type="date" value={targetRecordDate} onChange={(e) => setTargetRecordDate(e.target.value)} className="bg-transparent text-xs font-semibold text-slate-800 outline-none w-full cursor-pointer" />
             </div>
           </div>
 
@@ -543,9 +465,7 @@ export default function MindLogPage() {
                     type="button"
                     onClick={() => setSelectedMood(m.level)}
                     className={`flex flex-col items-center py-2 rounded-lg transition-all text-xs font-medium ${
-                      isSelected 
-                        ? 'bg-white shadow text-slate-900 font-bold scale-105' 
-                        : 'text-slate-400 hover:text-slate-600'
+                      isSelected ? 'bg-white shadow text-slate-900 font-bold scale-105' : 'text-slate-400 hover:text-slate-600'
                     }`}
                   >
                     <IconComponent className={`w-5 h-5 mb-1 ${isSelected ? m.color.split(' ')[0] : ''}`} />
@@ -556,78 +476,41 @@ export default function MindLogPage() {
             </div>
           </div>
 
-          {/* 照片上傳與釘選 */}
+          {/* 相片上傳 */}
           <div className="mb-4">
             <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider block mb-2">相片紀錄</label>
             {!stagedPhoto ? (
               <label className="flex flex-col items-center justify-center border-2 border-dashed border-slate-300 rounded-xl p-4 cursor-pointer hover:border-blue-400 bg-slate-50 transition-colors">
                 <Camera className="w-6 h-6 text-slate-400 mb-1" />
                 <span className="text-xs text-slate-500">拍照或選取照片</span>
-                <input 
-                  type="file" 
-                  accept="image/*" 
-                  capture="environment" 
-                  className="hidden" 
-                  onChange={handlePhotoUpload} 
-                />
+                <input type="file" accept="image/*" capture="environment" className="hidden" onChange={handlePhotoUpload} />
               </label>
             ) : (
               <div className="relative border border-slate-200 rounded-xl overflow-hidden bg-black/5">
-                <div 
-                  className="relative cursor-crosshair group"
-                  onClick={handleImageClick}
-                >
+                <div className="relative cursor-crosshair group" onClick={handleImageClick}>
                   {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img 
-                    src={stagedPhoto.previewUrl} 
-                    alt="預覽" 
-                    className="w-full h-44 object-cover select-none" 
-                  />
+                  <img src={stagedPhoto.previewUrl} alt="預覽" className="w-full h-44 object-cover select-none" />
                   {stagedPhoto.tags.map((tag) => (
-                    <div 
-                      key={tag.id}
-                      style={{ top: `${tag.yPercent}%`, left: `${tag.xPercent}%` }}
-                      className="absolute -translate-x-1/2 -translate-y-1/2 bg-black/75 backdrop-blur-md text-white text-[11px] px-2 py-0.5 rounded-full shadow pointer-events-none flex items-center gap-1"
-                    >
+                    <div key={tag.id} style={{ top: `${tag.yPercent}%`, left: `${tag.xPercent}%` }} className="absolute -translate-x-1/2 -translate-y-1/2 bg-black/75 backdrop-blur-md text-white text-[11px] px-2 py-0.5 rounded-full shadow pointer-events-none flex items-center gap-1">
                       <MapPin className="w-2.5 h-2.5 text-amber-400" />
                       {tag.caption}
                     </div>
                   ))}
-                  <div className="absolute inset-0 bg-black/20 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white text-xs font-medium pointer-events-none">
-                    點擊照片釘選心情氣泡
-                  </div>
                 </div>
-
                 {pendingTagPos && (
                   <div className="p-2 bg-white border-t border-slate-200 flex gap-2">
-                    <input 
-                      type="text" 
-                      placeholder="在這處留一句話..." 
-                      value={tempTagCaption}
-                      onChange={(e) => setTempTagCaption(e.target.value)}
-                      className="text-xs flex-1 border border-slate-300 rounded px-2 py-1 outline-none focus:border-blue-500"
-                      autoFocus
-                    />
-                    <button 
-                      onClick={addTagToPhoto} 
-                      className="bg-blue-600 text-white text-xs px-2.5 py-1 rounded font-medium"
-                    >
-                      標記
-                    </button>
+                    <input type="text" placeholder="在這處留一句話..." value={tempTagCaption} onChange={(e) => setTempTagCaption(e.target.value)} className="text-xs flex-1 border border-slate-300 rounded px-2 py-1 outline-none focus:border-blue-500" autoFocus />
+                    <button onClick={addTagToPhoto} className="bg-blue-600 text-white text-xs px-2.5 py-1 rounded font-medium">標記</button>
                   </div>
                 )}
-
-                <button 
-                  onClick={() => setStagedPhoto(null)} 
-                  className="absolute top-2 right-2 bg-white/80 backdrop-blur p-1 rounded-full text-slate-700 hover:text-rose-600 shadow"
-                >
+                <button onClick={() => setStagedPhoto(null)} className="absolute top-2 right-2 bg-white/80 backdrop-blur p-1 rounded-full text-slate-700 hover:text-rose-600 shadow">
                   <Trash2 className="w-3.5 h-3.5" />
                 </button>
               </div>
             )}
           </div>
 
-          {/* 隨筆內容 */}
+          {/* 隨筆文字 */}
           <div className="mb-4">
             <textarea
               rows={3}
@@ -638,16 +521,10 @@ export default function MindLogPage() {
             />
           </div>
 
-          {/* 操作按鈕 */}
+          {/* 送出與取消 */}
           <div className="flex gap-2">
             {editingRecordId && (
-              <button
-                type="button"
-                onClick={handleCancelEdit}
-                className="flex-1 bg-slate-200 hover:bg-slate-300 text-slate-700 font-medium py-2.5 px-4 rounded-xl transition text-sm"
-              >
-                取消
-              </button>
+              <button type="button" onClick={handleCancelEdit} className="flex-1 bg-slate-200 hover:bg-slate-300 text-slate-700 font-medium py-2.5 px-4 rounded-xl transition text-sm">取消</button>
             )}
             <button
               onClick={handleSubmit}
@@ -655,37 +532,64 @@ export default function MindLogPage() {
                 editingRecordId ? 'bg-amber-600 hover:bg-amber-700' : 'bg-blue-600 hover:bg-blue-700'
               }`}
             >
-              {editingRecordId ? (
-                <>
-                  <Check className="w-4 h-4" /> 儲存修改
-                </>
-              ) : (
-                <>
-                  <Send className="w-4 h-4" /> 儲存至 {targetRecordDate}
-                </>
-              )}
+              {editingRecordId ? <><Check className="w-4 h-4" /> 儲存修改</> : <><Send className="w-4 h-4" /> 儲存至 {targetRecordDate}</>}
             </button>
           </div>
         </div>
 
-        {/* 🔻 底部狀態列 */}
         <div className="pt-4 border-t border-slate-100 flex items-center justify-between text-xs text-slate-400">
           <span>Supabase 即時雲端同步</span>
           <span className="font-mono">{APP_VERSION}</span>
         </div>
       </aside>
 
-      {/* ──────────────── 右側主內容：心情時間軸與日期過濾 ──────────────── */}
-      <main className="flex-1 max-w-2xl mx-auto w-full p-4 md:p-8 flex flex-col justify-between">
-        <div>
+      {/* ──────────────── 主畫面容器：上半部時間軸＋手機版常駐頂欄 ──────────────── */}
+      <div className="flex-1 flex flex-col min-h-screen overflow-x-hidden">
+        
+        {/* 📱 手機專屬頂部常駐標題列 (置頂顯示頭像、自訂標題與同步狀態燈) */}
+        <header className="md:hidden bg-white/95 backdrop-blur-md sticky top-0 z-30 border-b border-slate-200 px-4 py-3 flex items-center justify-between shadow-sm">
+          {!isEditingHeader ? (
+            <div onClick={() => setIsEditingHeader(true)} className="flex items-center gap-2.5 cursor-pointer">
+              {headerConfig.avatarUrl ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={headerConfig.avatarUrl} alt="頭像" className="w-8 h-8 rounded-xl object-cover border border-slate-200" />
+              ) : (
+                <div className="w-8 h-8 rounded-xl bg-emerald-100 text-emerald-700 flex items-center justify-center text-base">🌿</div>
+              )}
+              <h1 className="text-base font-bold text-slate-900">{headerConfig.title}</h1>
+            </div>
+          ) : (
+            <div className="flex items-center gap-2 w-full justify-between">
+              <input 
+                type="text" 
+                maxLength={15} 
+                value={tempTitle} 
+                onChange={(e) => setTempTitle(e.target.value)} 
+                className="text-xs border rounded-lg px-2 py-1 w-32" 
+              />
+              <div className="flex gap-1">
+                <button onClick={() => setIsEditingHeader(false)} className="text-xs px-2 py-1 text-slate-500">取消</button>
+                <button onClick={saveHeaderConfig} className="text-xs bg-blue-600 text-white px-2.5 py-1 rounded-lg">儲存</button>
+              </div>
+            </div>
+          )}
+
+          {!isEditingHeader && (
+            <div className="flex items-center gap-2">
+              {syncStatus === 'syncing' && <RefreshCw className="w-4 h-4 text-amber-500 animate-spin" />}
+              {syncStatus === 'synced' && <Cloud className="w-4 h-4 text-emerald-600" />}
+              {syncStatus === 'error' && <CloudOff className="w-4 h-4 text-rose-500" />}
+            </div>
+          )}
+        </header>
+
+        {/* ──────────────── 上半部：日期篩選與日記時間軸 ──────────────── */}
+        <main className="flex-1 max-w-2xl mx-auto w-full p-4 md:p-8 pb-36 md:pb-8">
+          
           {/* 📅 指定日期過濾工具列 */}
-          <div className="bg-white rounded-2xl p-3.5 border border-slate-200/90 shadow-sm mb-6 flex flex-col sm:flex-row items-center justify-between gap-3">
+          <div className="bg-white rounded-2xl p-3 border border-slate-200/90 shadow-sm mb-5 flex flex-col sm:flex-row items-center justify-between gap-2.5">
             <div className="flex items-center gap-2 w-full sm:w-auto justify-between sm:justify-start">
-              <button
-                onClick={() => handleShiftDate(-1)}
-                className="p-1.5 rounded-lg border border-slate-200 hover:bg-slate-50 text-slate-600"
-                title="前一天"
-              >
+              <button onClick={() => handleShiftDate(-1)} className="p-1.5 rounded-lg border border-slate-200 hover:bg-slate-50 text-slate-600" title="前一天">
                 <ChevronLeft className="w-4 h-4" />
               </button>
 
@@ -697,19 +601,13 @@ export default function MindLogPage() {
                   onChange={(e) => {
                     const val = e.target.value;
                     setFilterDate(val);
-                    if (val && !editingRecordId) {
-                      setTargetRecordDate(val);
-                    }
+                    if (val && !editingRecordId) setTargetRecordDate(val);
                   }}
                   className="text-xs font-semibold text-slate-700 border border-slate-200 rounded-lg px-2 py-1 outline-none focus:border-blue-500"
                 />
               </div>
 
-              <button
-                onClick={() => handleShiftDate(1)}
-                className="p-1.5 rounded-lg border border-slate-200 hover:bg-slate-50 text-slate-600"
-                title="後一天"
-              >
+              <button onClick={() => handleShiftDate(1)} className="p-1.5 rounded-lg border border-slate-200 hover:bg-slate-50 text-slate-600" title="後一天">
                 <ChevronRight className="w-4 h-4" />
               </button>
             </div>
@@ -721,9 +619,7 @@ export default function MindLogPage() {
                   if (!editingRecordId) setTargetRecordDate(todayStr);
                 }}
                 className={`px-2.5 py-1 rounded-lg border transition ${
-                  filterDate === todayStr
-                    ? 'bg-blue-50 text-blue-600 border-blue-200 font-semibold'
-                    : 'border-slate-200 text-slate-600 hover:bg-slate-50'
+                  filterDate === todayStr ? 'bg-blue-50 text-blue-600 border-blue-200 font-semibold' : 'border-slate-200 text-slate-600 hover:bg-slate-50'
                 }`}
               >
                 今天
@@ -731,27 +627,25 @@ export default function MindLogPage() {
               <button
                 onClick={() => setFilterDate('')}
                 className={`px-2.5 py-1 rounded-lg border transition flex items-center gap-1 ${
-                  !filterDate
-                    ? 'bg-blue-600 text-white border-blue-600 font-semibold shadow-sm'
-                    : 'border-slate-200 text-slate-600 hover:bg-slate-50'
+                  !filterDate ? 'bg-blue-600 text-white border-blue-600 font-semibold shadow-sm' : 'border-slate-200 text-slate-600 hover:bg-slate-50'
                 }`}
               >
-                <RotateCcw className="w-3 h-3" /> 顯示全部
+                <RotateCcw className="w-3 h-3" /> 全部
               </button>
             </div>
           </div>
 
           {/* 筆數狀態 */}
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-base font-bold text-slate-900 flex items-center gap-2">
-              <Clock className="w-4 h-4 text-slate-500" /> 
-              {filterDate ? `指定日期：${filterDate}` : '完整時間軸'}
+          <div className="flex items-center justify-between mb-3 px-1">
+            <h2 className="text-sm font-bold text-slate-900 flex items-center gap-1.5">
+              <Clock className="w-3.5 h-3.5 text-slate-500" /> 
+              {filterDate ? `指定：${filterDate}` : '隨筆時間軸'}
             </h2>
-            <span className="text-xs text-slate-400">共 {entries?.length || 0} 篇記錄</span>
+            <span className="text-xs text-slate-400">共 {entries?.length || 0} 篇</span>
           </div>
 
           {/* 日記清單 */}
-          <div className="space-y-4">
+          <div className="space-y-3.5">
             {entries?.map((record) => {
               const mood = MOODS.find(m => m.level === record.moodLevel);
               const Icon = mood?.icon || Meh;
@@ -764,7 +658,7 @@ export default function MindLogPage() {
                     isEditing ? 'border-amber-400 ring-2 ring-amber-400/20' : 'border-slate-200/80'
                   }`}
                 >
-                  <div className="flex items-center justify-between mb-3">
+                  <div className="flex items-center justify-between mb-2.5">
                     <div className="flex items-center gap-2">
                       <div className={`p-1.5 rounded-lg bg-slate-50 ${mood?.color.split(' ')[0]}`}>
                         <Icon className="w-4 h-4" />
@@ -772,41 +666,25 @@ export default function MindLogPage() {
                       <span className="text-sm font-semibold text-slate-800">{record.moodLabel}</span>
                     </div>
                     
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-1.5">
                       <span className="text-xs font-medium text-slate-500 bg-slate-100 px-2 py-0.5 rounded">
                         {record.dateStr}
                       </span>
-                      <button
-                        onClick={() => handleStartEdit(record)}
-                        className="p-1 rounded text-slate-400 hover:text-amber-600 hover:bg-amber-50 transition"
-                        title="編輯此記事"
-                      >
+                      <button onClick={() => handleStartEdit(record)} className="p-1 rounded text-slate-400 hover:text-amber-600 transition" title="編輯">
                         <Edit3 className="w-3.5 h-3.5" />
                       </button>
-                      <button
-                        onClick={() => handleDelete(record)}
-                        className="p-1 rounded text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition"
-                        title="刪除此記事"
-                      >
+                      <button onClick={() => handleDelete(record)} className="p-1 rounded text-slate-400 hover:text-rose-600 transition" title="刪除">
                         <Trash2 className="w-3.5 h-3.5" />
                       </button>
                     </div>
                   </div>
 
                   {record.photos && record.photos.length > 0 && record.photos[0].blob && (
-                    <div className="relative rounded-xl overflow-hidden mb-3 border border-slate-100 bg-slate-950">
+                    <div className="relative rounded-xl overflow-hidden mb-2.5 border border-slate-100 bg-slate-950">
                       {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img
-                        src={URL.createObjectURL(record.photos[0].blob)}
-                        alt="記錄照片"
-                        className="w-full max-h-96 object-cover"
-                      />
+                      <img src={URL.createObjectURL(record.photos[0].blob)} alt="記錄照片" className="w-full max-h-80 object-cover" />
                       {record.photos[0].tags?.map((tag) => (
-                        <div
-                          key={tag.id}
-                          style={{ top: `${tag.yPercent}%`, left: `${tag.xPercent}%` }}
-                          className="absolute -translate-x-1/2 -translate-y-1/2 bg-black/70 backdrop-blur-md text-white text-xs px-2.5 py-1 rounded-full shadow-lg border border-white/20 flex items-center gap-1.5"
-                        >
+                        <div key={tag.id} style={{ top: `${tag.yPercent}%`, left: `${tag.xPercent}%` }} className="absolute -translate-x-1/2 -translate-y-1/2 bg-black/70 backdrop-blur-md text-white text-xs px-2.5 py-1 rounded-full shadow-lg border border-white/20 flex items-center gap-1.5">
                           <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
                           {tag.caption}
                         </div>
@@ -820,11 +698,8 @@ export default function MindLogPage() {
                     </p>
                   )}
 
-                  <div className="mt-3 pt-2 border-t border-slate-100 flex items-center justify-between text-[11px] text-slate-400">
-                    <span>
-                      歸檔日期：{record.dateStr}
-                      {record.updatedAt && ' (已編輯)'}
-                    </span>
+                  <div className="mt-2.5 pt-2 border-t border-slate-100 flex items-center justify-between text-[11px] text-slate-400">
+                    <span>歸檔：{record.dateStr}{record.updatedAt && ' (已編輯)'}</span>
                     <span className="font-mono text-[10px] text-slate-300">{record.appVersion}</span>
                   </div>
                 </article>
@@ -834,19 +709,136 @@ export default function MindLogPage() {
             {(!entries || entries.length === 0) && (
               <div className="text-center py-16 text-slate-400 border border-dashed rounded-2xl bg-white/50">
                 <CalendarIcon className="w-8 h-8 mx-auto mb-2 opacity-40" />
-                <p className="text-sm">
-                  {filterDate ? `${filterDate} 尚無任何心情記錄` : '尚無心情紀錄，隨時拍下第一張照片吧！'}
-                </p>
+                <p className="text-sm">{filterDate ? `${filterDate} 尚無任何心情記錄` : '尚無記錄，點擊下方開始記錄！'}</p>
               </div>
             )}
           </div>
-        </div>
 
-        {/* 🔻 手機版/主時間軸頁尾版本標示 */}
-        <div className="mt-12 text-center text-xs text-slate-400 font-mono">
-          MindLog PWA · {APP_VERSION}
-        </div>
-      </main>
+          <div className="mt-8 text-center text-xs text-slate-400 font-mono">
+            MindLog PWA · {APP_VERSION}
+          </div>
+        </main>
+
+        {/* ──────────────── 📱 手機專屬：下半部吸底抽屜／輸入區 (方案 B 核心) ──────────────── */}
+        <section className={`md:hidden fixed bottom-0 left-0 right-0 z-40 bg-white border-t border-slate-200/90 shadow-[0_-8px_30px_rgba(0,0,0,0.12)] transition-all duration-300 rounded-t-3xl ${
+          isDrawerOpen ? 'max-h-[88vh] overflow-y-auto' : 'max-h-20'
+        } ${editingRecordId ? 'ring-2 ring-amber-400' : ''}`}>
+          
+          {/* 吸底抽屜把手與切換列 */}
+          <div 
+            onClick={() => setIsDrawerOpen(!isDrawerOpen)}
+            className="p-3 flex items-center justify-between cursor-pointer border-b border-slate-100 bg-slate-50/80 rounded-t-3xl select-none"
+          >
+            <div className="flex items-center gap-2">
+              <span className="w-2 h-2 rounded-full bg-blue-600 animate-pulse" />
+              <span className="text-xs font-bold text-slate-800">
+                {editingRecordId ? `正在編輯：${targetRecordDate}` : '記錄此刻心情隨筆'}
+              </span>
+            </div>
+            <div className="flex items-center gap-1.5 text-xs text-slate-500 font-medium">
+              <span>{isDrawerOpen ? '收折面板' : '點擊展開'}</span>
+              {isDrawerOpen ? <ChevronDown className="w-4 h-4 text-slate-400" /> : <ChevronUp className="w-4 h-4 text-slate-400" />}
+            </div>
+          </div>
+
+          {/* 抽屜內容主體 */}
+          <div className="p-4 space-y-3.5">
+            {/* 快速拍照／相片選取列 */}
+            <div className="flex items-center gap-2">
+              <label className="flex-1 flex items-center justify-center gap-2 bg-slate-100 hover:bg-slate-200 text-slate-700 py-2 px-3 rounded-xl cursor-pointer text-xs font-medium border border-slate-200">
+                <Camera className="w-4 h-4 text-blue-600" />
+                <span>{stagedPhoto ? '更換照片' : '拍下此刻相片'}</span>
+                <input type="file" accept="image/*" capture="environment" className="hidden" onChange={handlePhotoUpload} />
+              </label>
+
+              {/* 指定日期快捷 */}
+              <div className="flex items-center gap-1 bg-slate-100 px-2 py-1.5 rounded-xl border border-slate-200">
+                <CalendarIcon className="w-3.5 h-3.5 text-blue-500" />
+                <input 
+                  type="date" 
+                  value={targetRecordDate} 
+                  onChange={(e) => setTargetRecordDate(e.target.value)} 
+                  className="bg-transparent text-xs font-semibold text-slate-700 outline-none w-28" 
+                />
+              </div>
+            </div>
+
+            {/* 相片預覽與釘選 */}
+            {stagedPhoto && (
+              <div className="relative border border-slate-200 rounded-xl overflow-hidden bg-black/5">
+                <div className="relative cursor-crosshair" onClick={handleImageClick}>
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src={stagedPhoto.previewUrl} alt="預覽" className="w-full h-40 object-cover" />
+                  {stagedPhoto.tags.map((tag) => (
+                    <div key={tag.id} style={{ top: `${tag.yPercent}%`, left: `${tag.xPercent}%` }} className="absolute -translate-x-1/2 -translate-y-1/2 bg-black/75 backdrop-blur text-white text-[10px] px-2 py-0.5 rounded-full pointer-events-none flex items-center gap-1">
+                      <MapPin className="w-2.5 h-2.5 text-amber-400" />
+                      {tag.caption}
+                    </div>
+                  ))}
+                </div>
+                {pendingTagPos && (
+                  <div className="p-2 bg-white border-t border-slate-200 flex gap-1.5">
+                    <input type="text" placeholder="留一句話..." value={tempTagCaption} onChange={(e) => setTempTagCaption(e.target.value)} className="text-xs flex-1 border rounded px-2 py-1 outline-none" autoFocus />
+                    <button onClick={addTagToPhoto} className="bg-blue-600 text-white text-xs px-2.5 py-1 rounded">標記</button>
+                  </div>
+                )}
+                <button onClick={() => setStagedPhoto(null)} className="absolute top-2 right-2 bg-white/80 p-1 rounded-full text-rose-600 shadow">
+                  <Trash2 className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            )}
+
+            {/* 心情選擇刻度 */}
+            <div className="grid grid-cols-5 gap-1 bg-slate-50 p-1.5 rounded-xl border border-slate-200">
+              {MOODS.map((m) => {
+                const IconComponent = m.icon;
+                const isSelected = selectedMood === m.level;
+                return (
+                  <button
+                    key={m.level}
+                    type="button"
+                    onClick={() => setSelectedMood(m.level)}
+                    className={`flex flex-col items-center py-1.5 rounded-lg text-xs ${
+                      isSelected ? 'bg-white shadow font-bold scale-105' : 'text-slate-400'
+                    }`}
+                  >
+                    <IconComponent className={`w-4 h-4 mb-0.5 ${isSelected ? m.color.split(' ')[0] : ''}`} />
+                    <span className="text-[10px]">{m.label}</span>
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* 文字框 */}
+            <textarea
+              rows={2}
+              placeholder="留下一句心情隨筆..."
+              value={note}
+              onFocus={() => setIsDrawerOpen(true)}
+              onChange={(e) => setNote(e.target.value)}
+              className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none focus:ring-2 focus:ring-blue-500/20 resize-none bg-slate-50"
+            />
+
+            {/* 送出與取消按鈕 */}
+            <div className="flex gap-2 pb-1">
+              {editingRecordId && (
+                <button type="button" onClick={handleCancelEdit} className="flex-1 bg-slate-200 text-slate-700 py-2 rounded-xl text-xs font-semibold">
+                  取消
+                </button>
+              )}
+              <button
+                onClick={handleSubmit}
+                className={`flex-1 text-white py-2 rounded-xl flex items-center justify-center gap-1.5 shadow text-xs font-semibold ${
+                  editingRecordId ? 'bg-amber-600' : 'bg-blue-600'
+                }`}
+              >
+                {editingRecordId ? <><Check className="w-3.5 h-3.5" /> 儲存修改</> : <><Send className="w-3.5 h-3.5" /> 儲存記錄</>}
+              </button>
+            </div>
+          </div>
+        </section>
+
+      </div>
     </div>
   );
 }
