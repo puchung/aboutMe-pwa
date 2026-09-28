@@ -7,12 +7,13 @@ import {
   Smile, Frown, Meh, Laugh, Angry, 
   Camera, MapPin, Send, Trash2, Calendar as CalendarIcon, 
   Clock, Edit3, X, ChevronLeft, ChevronRight, RotateCcw, Check,
-  Upload, Image as ImageIcon, Cloud, CloudOff, RefreshCw, ChevronUp, ChevronDown
+  Upload, Image as ImageIcon, Cloud, CloudOff, RefreshCw, 
+  ChevronUp, ChevronDown, Bug, Copy, Trash
 } from 'lucide-react';
 import { db, MoodRecord, PhotoData, PhotoTag } from '@/lib/db';
 import { supabase } from '@/lib/supabase';
 
-const APP_VERSION = 'Ver. 001.005.000';
+const APP_VERSION = 'Ver. 001.006.000';
 const DEFAULT_TITLE = 'MindLog';
 const SYNC_ROW_ID = 'user_mindlog_store';
 
@@ -53,6 +54,35 @@ const base64ToBlob = (base64: string): Blob => {
 export default function MindLogPage() {
   const todayStr = new Date().toISOString().split('T')[0];
 
+  // 🐞 診斷日誌系統
+  const [debugLogs, setDebugLogs] = useState<string[]>([]);
+  const [showLogModal, setShowLogModal] = useState(false);
+
+  const appendLog = (msg: string) => {
+    const now = new Date();
+    const timeStr = now.toTimeString().split(' ')[0];
+    const logItem = `[${timeStr}] ${msg}`;
+    console.log(logItem);
+    setDebugLogs((prev) => [logItem, ...prev.slice(0, 50)]);
+  };
+
+  // 全域例外捕獲
+  useEffect(() => {
+    appendLog(`系統初始化: ${APP_VERSION}`);
+    const handleError = (e: ErrorEvent) => {
+      appendLog(`❌ 全域錯誤: ${e.message} (行號: ${e.lineno})`);
+    };
+    const handleRejection = (e: PromiseRejectionEvent) => {
+      appendLog(`❌ 未捕捉 Promise 異常: ${e.reason?.message || e.reason}`);
+    };
+    window.addEventListener('error', handleError);
+    window.addEventListener('unhandledrejection', handleRejection);
+    return () => {
+      window.removeEventListener('error', handleError);
+      window.removeEventListener('unhandledrejection', handleRejection);
+    };
+  }, []);
+
   // 🌿 標題與使用者頭像
   const [headerConfig, setHeaderConfig] = useState<HeaderConfig>({
     title: DEFAULT_TITLE,
@@ -63,7 +93,7 @@ export default function MindLogPage() {
   const [tempAvatar, setTempAvatar] = useState<string | null>(null);
   const headerFileRef = useRef<HTMLInputElement>(null);
 
-  // 📱 行動端底部編輯器展開/收折 (在 PC 版預設全展開)
+  // 📱 行動端底部編輯器展開/收折
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
 
   // ☁️ 雲端同步狀態
@@ -97,6 +127,7 @@ export default function MindLogPage() {
     const pullFromCloud = async () => {
       try {
         setSyncStatus('syncing');
+        appendLog('開始自 Supabase 拉取雲端資料...');
         const { data, error } = await supabase
           .from('mindlog_sync')
           .select('*')
@@ -104,7 +135,7 @@ export default function MindLogPage() {
           .single();
 
         if (error && error.code !== 'PGRST116') {
-          console.warn('雲端初次拉取注意:', error);
+          appendLog(`⚠️ Supabase 雲端拉取回應: ${error.message} (代碼: ${error.code})`);
           setSyncStatus('synced');
           return;
         }
@@ -115,6 +146,7 @@ export default function MindLogPage() {
             setTempTitle(data.settings.title || DEFAULT_TITLE);
             setTempAvatar(data.settings.avatarUrl || null);
             localStorage.setItem('mindlog_header_config', JSON.stringify(data.settings));
+            appendLog('已同步雲端標題與頭像設定');
           }
 
           if (data.entries && Array.isArray(data.entries)) {
@@ -130,11 +162,14 @@ export default function MindLogPage() {
                 photos: restoredPhotos
               });
             }
+            appendLog(`成功同步雲端日記共 ${cloudRecords.length} 筆`);
           }
+        } else {
+          appendLog('雲端尚無備份資料');
         }
         setSyncStatus('synced');
-      } catch (err) {
-        console.error('雲端載入失敗:', err);
+      } catch (err: any) {
+        appendLog(`❌ 雲端拉取異常: ${err?.message || err}`);
         setSyncStatus('error');
       }
     };
@@ -146,6 +181,7 @@ export default function MindLogPage() {
   const pushToCloud = async (newSettings?: HeaderConfig) => {
     try {
       setSyncStatus('syncing');
+      appendLog('正在打包本機資料並同步至 Supabase...');
       const curSettings = newSettings || headerConfig;
       const allLocalRecords = await db.records.toArray();
 
@@ -170,27 +206,35 @@ export default function MindLogPage() {
         updated_at: new Date().toISOString()
       });
 
-      if (error) throw error;
+      if (error) {
+        appendLog(`❌ Supabase 寫入失敗: ${error.message}`);
+        throw error;
+      }
+      appendLog('✅ Supabase 雲端資料庫同步完成');
       setSyncStatus('synced');
-    } catch (err) {
-      console.error('推送雲端失敗:', err);
+    } catch (err: any) {
+      appendLog(`❌ 推送雲端發生錯誤: ${err?.message || err}`);
       setSyncStatus('error');
     }
   };
 
-  // 3. 頭像上傳與標題儲存
+  // 3. 頭像與標題處理
   const handleAvatarUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
     try {
+      appendLog(`開始壓縮頭像檔案: ${file.name} (${Math.round(file.size / 1024)} KB)`);
       const options = { maxSizeMB: 0.08, maxWidthOrHeight: 256, useWebWorker: true };
       const compressedBlob = await imageCompression(file, options);
       const reader = new FileReader();
-      reader.onloadend = () => setTempAvatar(reader.result as string);
+      reader.onloadend = () => {
+        setTempAvatar(reader.result as string);
+        appendLog('頭像處理完成');
+      };
       reader.readAsDataURL(compressedBlob);
-    } catch (err) {
-      console.error('標題圖片壓縮失敗:', err);
+    } catch (err: any) {
+      appendLog(`❌ 標題圖片壓縮失敗: ${err?.message || err}`);
     }
   };
 
@@ -202,6 +246,7 @@ export default function MindLogPage() {
     setHeaderConfig(updated);
     localStorage.setItem('mindlog_header_config', JSON.stringify(updated));
     setIsEditingHeader(false);
+    appendLog(`儲存標題設定: [${updated.title}]`);
     await pushToCloud(updated);
   };
 
@@ -212,6 +257,7 @@ export default function MindLogPage() {
     setTempAvatar(null);
     localStorage.removeItem('mindlog_header_config');
     setIsEditingHeader(false);
+    appendLog('已還原預設標題設定');
     await pushToCloud(def);
   };
 
@@ -221,6 +267,7 @@ export default function MindLogPage() {
     if (!file) return;
 
     try {
+      appendLog(`選取相片: ${file.name} (${Math.round(file.size / 1024)} KB)，正在壓縮...`);
       const options = { maxSizeMB: 0.5, maxWidthOrHeight: 1280, useWebWorker: true };
       const compressedBlob = await imageCompression(file, options);
       const previewUrl = URL.createObjectURL(compressedBlob);
@@ -232,8 +279,9 @@ export default function MindLogPage() {
         tags: []
       });
       setIsDrawerOpen(true);
-    } catch (err) {
-      console.error('照片壓縮失敗:', err);
+      appendLog('相片已成功掛載至暫存區');
+    } catch (err: any) {
+      appendLog(`❌ 相片壓縮失敗: ${err?.message || err}`);
     }
   };
 
@@ -258,50 +306,69 @@ export default function MindLogPage() {
     });
     setPendingTagPos(null);
     setTempTagCaption('');
+    appendLog(`釘選相片標籤: "${newTag.caption}"`);
   };
 
-  // 5. 新增/更新日記
+  // 5. 核心儲存/更新日誌函式 (加入完整診斷攔截)
   const handleSubmit = async () => {
-    if (!note.trim() && !stagedPhoto) return;
+    appendLog('【操作】點擊儲存按鈕，開始檢查送出資料...');
+    appendLog(`檢查欄位: 文字長度=${note.trim().length}, 照片掛載=${!!stagedPhoto}, 指定日期=${targetRecordDate}, 編輯ID=${editingRecordId || '新增模式'}`);
 
-    const moodObj = MOODS.find(m => m.level === selectedMood)!;
-    const assignedDate = new Date(`${targetRecordDate}T12:00:00`);
-    const dateStr = targetRecordDate;
-
-    if (editingRecordId) {
-      await db.records.update(editingRecordId, {
-        dateStr,
-        moodLevel: selectedMood,
-        moodLabel: moodObj.label,
-        note: note.trim(),
-        photos: stagedPhoto ? [stagedPhoto] : [],
-        updatedAt: Date.now(),
-      });
-      setEditingRecordId(null);
-    } else {
-      const newRecord: MoodRecord = {
-        timestamp: assignedDate.getTime(),
-        dateStr,
-        moodLevel: selectedMood,
-        moodLabel: moodObj.label,
-        note: note.trim(),
-        photos: stagedPhoto ? [stagedPhoto] : [],
-        createdAt: assignedDate.toLocaleDateString('zh-TW', { month: '2-digit', day: '2-digit', weekday: 'short' }),
-        appVersion: APP_VERSION
-      };
-      await db.records.add(newRecord);
+    if (!note.trim() && !stagedPhoto) {
+      appendLog('⚠️ 阻擋儲存: 文字內容與相片皆為空，請輸入文字或拍照！');
+      alert('請先輸入隨筆文字或拍下一張照片！');
+      return;
     }
 
-    setNote('');
-    setStagedPhoto(null);
-    setPendingTagPos(null);
-    setTargetRecordDate(filterDate || todayStr);
-    setIsDrawerOpen(false);
+    try {
+      const moodObj = MOODS.find(m => m.level === selectedMood)!;
+      const assignedDate = new Date(`${targetRecordDate}T12:00:00`);
+      const dateStr = targetRecordDate;
 
-    await pushToCloud();
+      if (editingRecordId) {
+        appendLog(`正在更新 IndexedDB 紀錄 (ID: ${editingRecordId})...`);
+        await db.records.update(editingRecordId, {
+          dateStr,
+          moodLevel: selectedMood,
+          moodLabel: moodObj.label,
+          note: note.trim(),
+          photos: stagedPhoto ? [stagedPhoto] : [],
+          updatedAt: Date.now(),
+        });
+        appendLog(`✅ IndexedDB 紀錄 (ID: ${editingRecordId}) 更新成功`);
+        setEditingRecordId(null);
+      } else {
+        appendLog('正在寫入 IndexedDB 全新紀錄...');
+        const newRecord: MoodRecord = {
+          timestamp: assignedDate.getTime(),
+          dateStr,
+          moodLevel: selectedMood,
+          moodLabel: moodObj.label,
+          note: note.trim(),
+          photos: stagedPhoto ? [stagedPhoto] : [],
+          createdAt: assignedDate.toLocaleDateString('zh-TW', { month: '2-digit', day: '2-digit', weekday: 'short' }),
+          appVersion: APP_VERSION
+        };
+        const newId = await db.records.add(newRecord);
+        appendLog(`✅ IndexedDB 寫入成功，產生新 ID: ${newId}`);
+      }
+
+      setNote('');
+      setStagedPhoto(null);
+      setPendingTagPos(null);
+      setTargetRecordDate(filterDate || todayStr);
+      setIsDrawerOpen(false);
+
+      // 觸發雲端儲存
+      await pushToCloud();
+    } catch (err: any) {
+      appendLog(`❌ 儲存過程發生嚴重例外: ${err?.message || err}`);
+      setShowLogModal(true);
+    }
   };
 
   const handleStartEdit = (record: MoodRecord) => {
+    appendLog(`【操作】載入紀錄編輯 (ID: ${record.id}, 日期: ${record.dateStr})`);
     setEditingRecordId(record.id!);
     setSelectedMood(record.moodLevel);
     setNote(record.note);
@@ -318,11 +385,11 @@ export default function MindLogPage() {
     }
 
     setIsDrawerOpen(true);
-    // 滾動至底部抽屜
     window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
   };
 
   const handleCancelEdit = () => {
+    appendLog('【操作】取消編輯');
     setEditingRecordId(null);
     setNote('');
     setStagedPhoto(null);
@@ -334,6 +401,7 @@ export default function MindLogPage() {
   const handleDelete = async (record: MoodRecord) => {
     if (window.confirm(`確定要刪除 ${record.dateStr} 的這篇心情隨筆嗎？\n此動作將同步從雲端抹除。`)) {
       if (record.id) {
+        appendLog(`【操作】刪除紀錄 (ID: ${record.id})`);
         await db.records.delete(record.id);
         if (editingRecordId === record.id) {
           handleCancelEdit();
@@ -353,10 +421,16 @@ export default function MindLogPage() {
     }
   };
 
+  const handleCopyLogs = () => {
+    const text = debugLogs.join('\n');
+    navigator.clipboard.writeText(text);
+    alert('✅ 已複製最新診斷日誌至剪貼簿！');
+  };
+
   return (
     <div className="min-h-screen bg-slate-100 text-slate-800 flex flex-col md:flex-row font-sans">
       
-      {/* ──────────────── PC 版維持左側邊欄；手機版隱藏並移至吸底抽屜 ──────────────── */}
+      {/* ──────────────── PC 版維持左側邊欄 ──────────────── */}
       <aside className={`hidden md:flex w-96 bg-white border-r border-slate-200 p-5 flex-col justify-between shrink-0 shadow-sm h-screen sticky top-0 transition-all ${
         editingRecordId ? 'ring-2 ring-amber-400/80 bg-amber-50/10' : ''
       }`}>
@@ -421,8 +495,17 @@ export default function MindLogPage() {
               </div>
             )}
 
+            {/* 🐞 PC 端狀態工具列 */}
             {!isEditingHeader && (
-              <div className="flex items-center pl-2">
+              <div className="flex items-center gap-2 pl-2">
+                <button
+                  type="button"
+                  onClick={() => setShowLogModal(true)}
+                  className="p-1.5 rounded-lg border border-slate-200 hover:bg-slate-50 text-slate-500"
+                  title="開啟診斷日誌"
+                >
+                  <Bug className="w-4 h-4 text-amber-600" />
+                </button>
                 {syncStatus === 'syncing' && <div title="正在同步至雲端..." className="p-1.5 rounded-lg bg-amber-50 text-amber-500"><RefreshCw className="w-4 h-4 animate-spin" /></div>}
                 {syncStatus === 'synced' && <div title="☁️ 雲端已即時同步" className="p-1.5 rounded-lg bg-emerald-50 text-emerald-600"><Cloud className="w-4 h-4" /></div>}
                 {syncStatus === 'error' && <div title="❌ 同步異常" className="p-1.5 rounded-lg bg-rose-50 text-rose-500"><CloudOff className="w-4 h-4" /></div>}
@@ -546,7 +629,7 @@ export default function MindLogPage() {
       {/* ──────────────── 主畫面容器：上半部時間軸＋手機版常駐頂欄 ──────────────── */}
       <div className="flex-1 flex flex-col min-h-screen overflow-x-hidden">
         
-        {/* 📱 手機專屬頂部常駐標題列 (置頂顯示頭像、自訂標題與同步狀態燈) */}
+        {/* 📱 手機專屬頂部常駐標題列 (新增 🐞 診斷日誌按鈕) */}
         <header className="md:hidden bg-white/95 backdrop-blur-md sticky top-0 z-30 border-b border-slate-200 px-4 py-3 flex items-center justify-between shadow-sm">
           {!isEditingHeader ? (
             <div onClick={() => setIsEditingHeader(true)} className="flex items-center gap-2.5 cursor-pointer">
@@ -576,6 +659,16 @@ export default function MindLogPage() {
 
           {!isEditingHeader && (
             <div className="flex items-center gap-2">
+              {/* 🐞 手機端診斷日誌按鈕 */}
+              <button
+                type="button"
+                onClick={() => setShowLogModal(true)}
+                className="p-1.5 rounded-lg border border-slate-200 bg-slate-50 text-slate-600 active:scale-95"
+                title="查看日誌"
+              >
+                <Bug className="w-4 h-4 text-amber-600" />
+              </button>
+
               {syncStatus === 'syncing' && <RefreshCw className="w-4 h-4 text-amber-500 animate-spin" />}
               {syncStatus === 'synced' && <Cloud className="w-4 h-4 text-emerald-600" />}
               {syncStatus === 'error' && <CloudOff className="w-4 h-4 text-rose-500" />}
@@ -719,12 +812,11 @@ export default function MindLogPage() {
           </div>
         </main>
 
-        {/* ──────────────── 📱 手機專屬：下半部吸底抽屜／輸入區 (方案 B 核心) ──────────────── */}
+        {/* ──────────────── 📱 手機專屬：下半部吸底抽屜／輸入區 ──────────────── */}
         <section className={`md:hidden fixed bottom-0 left-0 right-0 z-40 bg-white border-t border-slate-200/90 shadow-[0_-8px_30px_rgba(0,0,0,0.12)] transition-all duration-300 rounded-t-3xl ${
           isDrawerOpen ? 'max-h-[88vh] overflow-y-auto' : 'max-h-20'
         } ${editingRecordId ? 'ring-2 ring-amber-400' : ''}`}>
           
-          {/* 吸底抽屜把手與切換列 */}
           <div 
             onClick={() => setIsDrawerOpen(!isDrawerOpen)}
             className="p-3 flex items-center justify-between cursor-pointer border-b border-slate-100 bg-slate-50/80 rounded-t-3xl select-none"
@@ -741,9 +833,7 @@ export default function MindLogPage() {
             </div>
           </div>
 
-          {/* 抽屜內容主體 */}
           <div className="p-4 space-y-3.5">
-            {/* 快速拍照／相片選取列 */}
             <div className="flex items-center gap-2">
               <label className="flex-1 flex items-center justify-center gap-2 bg-slate-100 hover:bg-slate-200 text-slate-700 py-2 px-3 rounded-xl cursor-pointer text-xs font-medium border border-slate-200">
                 <Camera className="w-4 h-4 text-blue-600" />
@@ -751,7 +841,6 @@ export default function MindLogPage() {
                 <input type="file" accept="image/*" capture="environment" className="hidden" onChange={handlePhotoUpload} />
               </label>
 
-              {/* 指定日期快捷 */}
               <div className="flex items-center gap-1 bg-slate-100 px-2 py-1.5 rounded-xl border border-slate-200">
                 <CalendarIcon className="w-3.5 h-3.5 text-blue-500" />
                 <input 
@@ -763,7 +852,6 @@ export default function MindLogPage() {
               </div>
             </div>
 
-            {/* 相片預覽與釘選 */}
             {stagedPhoto && (
               <div className="relative border border-slate-200 rounded-xl overflow-hidden bg-black/5">
                 <div className="relative cursor-crosshair" onClick={handleImageClick}>
@@ -788,7 +876,6 @@ export default function MindLogPage() {
               </div>
             )}
 
-            {/* 心情選擇刻度 */}
             <div className="grid grid-cols-5 gap-1 bg-slate-50 p-1.5 rounded-xl border border-slate-200">
               {MOODS.map((m) => {
                 const IconComponent = m.icon;
@@ -809,7 +896,6 @@ export default function MindLogPage() {
               })}
             </div>
 
-            {/* 文字框 */}
             <textarea
               rows={2}
               placeholder="留下一句心情隨筆..."
@@ -819,7 +905,6 @@ export default function MindLogPage() {
               className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none focus:ring-2 focus:ring-blue-500/20 resize-none bg-slate-50"
             />
 
-            {/* 送出與取消按鈕 */}
             <div className="flex gap-2 pb-1">
               {editingRecordId && (
                 <button type="button" onClick={handleCancelEdit} className="flex-1 bg-slate-200 text-slate-700 py-2 rounded-xl text-xs font-semibold">
@@ -839,6 +924,72 @@ export default function MindLogPage() {
         </section>
 
       </div>
+
+      {/* ──────────────── 🐞 診斷日誌彈窗 (Modal) ──────────────── */}
+      {showLogModal && (
+        <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-700 text-slate-100 rounded-2xl w-full max-w-lg max-h-[80vh] flex flex-col shadow-2xl overflow-hidden font-mono">
+            {/* 標題列 */}
+            <div className="p-3.5 border-b border-slate-800 flex items-center justify-between bg-slate-950">
+              <div className="flex items-center gap-2">
+                <Bug className="w-4 h-4 text-amber-400" />
+                <span className="text-xs font-bold text-slate-200">系統診斷日誌 ({debugLogs.length} 筆)</span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <button
+                  onClick={handleCopyLogs}
+                  className="p-1 px-2 rounded-lg bg-blue-600/30 text-blue-300 hover:bg-blue-600/50 text-[11px] flex items-center gap-1"
+                >
+                  <Copy className="w-3 h-3" /> 複製
+                </button>
+                <button
+                  onClick={() => setDebugLogs([])}
+                  className="p-1 px-2 rounded-lg bg-slate-800 text-slate-400 hover:text-rose-400 text-[11px] flex items-center gap-1"
+                >
+                  <Trash className="w-3 h-3" /> 清空
+                </button>
+                <button
+                  onClick={() => setShowLogModal(false)}
+                  className="p-1 text-slate-400 hover:text-white"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+
+            {/* 日誌內容串流 */}
+            <div className="p-3.5 overflow-y-auto flex-1 space-y-1.5 text-[11px] text-slate-300 select-text">
+              {debugLogs.length === 0 ? (
+                <div className="text-center py-10 text-slate-500">目前尚無除錯日誌</div>
+              ) : (
+                debugLogs.map((log, i) => (
+                  <div 
+                    key={i} 
+                    className={`leading-relaxed break-all ${
+                      log.includes('❌') 
+                        ? 'text-rose-400 font-semibold' 
+                        : log.includes('⚠️') 
+                        ? 'text-amber-300' 
+                        : log.includes('✅') 
+                        ? 'text-emerald-400' 
+                        : 'text-slate-300'
+                    }`}
+                  >
+                    {log}
+                  </div>
+                ))
+              )}
+            </div>
+
+            {/* 視窗底欄 */}
+            <div className="p-2.5 bg-slate-950 border-t border-slate-800 text-[10px] text-slate-500 flex justify-between">
+              <span>MindLog Debugger</span>
+              <span>{APP_VERSION}</span>
+            </div>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }
