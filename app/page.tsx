@@ -1,17 +1,18 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import imageCompression from 'browser-image-compression';
 import { 
   Smile, Frown, Meh, Laugh, Angry, 
   Camera, MapPin, Send, Trash2, Calendar as CalendarIcon, 
   Clock, Edit3, X, ChevronLeft, ChevronRight, RotateCcw, Check,
-  Tag, ChevronUp, ChevronDown, Plus
+  Tag, ChevronUp, ChevronDown, Plus, Image as ImageIcon, RotateCcw as ResetIcon, Settings
 } from 'lucide-react';
 import { db, MoodRecord, PhotoData, PhotoTag } from '@/lib/db';
 
-const APP_VERSION = 'Ver. 001.005.000';
+const APP_VERSION = 'Ver. 001.006.000';
+const DEFAULT_TITLE = 'MindLog';
 
 interface CategoryOption {
   id: string;
@@ -36,14 +37,28 @@ const MOODS: { level: 1 | 2 | 3 | 4 | 5; label: string; icon: any; color: string
   { level: 1, label: '低落', icon: Angry, color: 'text-rose-500 hover:bg-rose-50' },
 ];
 
+interface HeaderConfig {
+  title: string;
+  bgImageUrl: string | null;
+}
+
 export default function MindLogPage() {
   const todayStr = new Date().toISOString().split('T')[0];
 
-  // 🏷️ 分類狀態管理 (支援自訂與本地儲存)
+  // 🌿 Title 與背景封面設定
+  const [headerConfig, setHeaderConfig] = useState<HeaderConfig>({
+    title: DEFAULT_TITLE,
+    bgImageUrl: null,
+  });
+  const [isEditingHeader, setIsEditingHeader] = useState(false);
+  const [tempTitle, setTempTitle] = useState(DEFAULT_TITLE);
+  const headerFileRef = useRef<HTMLInputElement>(null);
+
+  // 🏷️ 分類狀態管理
   const [categories, setCategories] = useState<CategoryOption[]>(DEFAULT_CATEGORIES);
   const [selectedCategory, setSelectedCategory] = useState<string>('daily');
 
-  // 抽屜展開/收折狀態 (手機端使用)
+  // 手機抽屜展開/收折
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
 
   const [selectedMood, setSelectedMood] = useState<1 | 2 | 3 | 4 | 5>(3);
@@ -62,14 +77,25 @@ export default function MindLogPage() {
   const [filterDate, setFilterDate] = useState<string>('');
   const [filterCategory, setFilterCategory] = useState<string>('all');
 
-  // 載入自訂分類
+  // 載入本地儲存之 Header 設定與自訂分類
   useEffect(() => {
-    const saved = localStorage.getItem('mindlog_custom_categories');
-    if (saved) {
+    const savedHeader = localStorage.getItem('mindlog_header_config');
+    if (savedHeader) {
       try {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          setCategories(parsed);
+        const parsed = JSON.parse(savedHeader);
+        setHeaderConfig(parsed);
+        setTempTitle(parsed.title || DEFAULT_TITLE);
+      } catch (e) {
+        console.error('讀取 Header 設定失敗:', e);
+      }
+    }
+
+    const savedCats = localStorage.getItem('mindlog_custom_categories');
+    if (savedCats) {
+      try {
+        const parsedCats = JSON.parse(savedCats);
+        if (Array.isArray(parsedCats) && parsedCats.length > 0) {
+          setCategories(parsedCats);
         }
       } catch (e) {
         console.error('讀取自訂分類失敗:', e);
@@ -77,15 +103,56 @@ export default function MindLogPage() {
     }
   }, []);
 
+  // 儲存 Title 與封面相片設定
+  const saveHeaderConfig = (newConfig: HeaderConfig) => {
+    setHeaderConfig(newConfig);
+    localStorage.setItem('mindlog_header_config', JSON.stringify(newConfig));
+  };
+
+  // 更換封面相片
+  const handleCoverUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    try {
+      const options = { maxSizeMB: 0.4, maxWidthOrHeight: 1280, useWebWorker: true };
+      const compressedBlob = await imageCompression(file, options);
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        const base64data = reader.result as string;
+        saveHeaderConfig({ ...headerConfig, bgImageUrl: base64data });
+      };
+      reader.readAsDataURL(compressedBlob);
+    } catch (err) {
+      console.error('封面照片壓縮失敗:', err);
+    }
+  };
+
+  // 還原預設 Title 與封面
+  const handleResetHeader = () => {
+    if (window.confirm('確定要還原預設標題與純色背景嗎？')) {
+      const defConfig: HeaderConfig = { title: DEFAULT_TITLE, bgImageUrl: null };
+      setTempTitle(DEFAULT_TITLE);
+      saveHeaderConfig(defConfig);
+      setIsEditingHeader(false);
+    }
+  };
+
+  // 儲存文字標題修改
+  const handleSaveTitle = () => {
+    const newTitle = tempTitle.trim() || DEFAULT_TITLE;
+    saveHeaderConfig({ ...headerConfig, title: newTitle });
+    setIsEditingHeader(false);
+  };
+
   // 儲存自訂分類
   const persistCategories = (newCats: CategoryOption[]) => {
     setCategories(newCats);
     localStorage.setItem('mindlog_custom_categories', JSON.stringify(newCats));
   };
 
-  // 使用者新增分類
   const handleAddNewCategory = () => {
-    const name = window.prompt('請輸入新分類名稱 (例如：運動、閱讀、理財)：');
+    const name = window.prompt('請輸入新分類名稱 (例如：閱讀、健身、理財)：');
     if (!name || !name.trim()) return;
 
     const trimmed = name.trim();
@@ -107,7 +174,6 @@ export default function MindLogPage() {
     setSelectedCategory(newCat.id);
   };
 
-  // 刪除自訂分類
   const handleDeleteCategory = (catId: string, e: React.MouseEvent) => {
     e.stopPropagation();
     if (window.confirm('確定要刪除此分類嗎？既有已套用的日記將自動歸入日常隨筆。')) {
@@ -155,7 +221,6 @@ export default function MindLogPage() {
     }
   };
 
-  // 照片釘選
   const handleImageClick = (e: React.MouseEvent<HTMLDivElement>) => {
     const rect = e.currentTarget.getBoundingClientRect();
     const xPercent = ((e.clientX - rect.left) / rect.width) * 100;
@@ -179,7 +244,6 @@ export default function MindLogPage() {
     setTempTagCaption('');
   };
 
-  // 儲存/更新
   const handleSubmit = async () => {
     if (!note.trim() && !stagedPhoto) return;
 
@@ -221,7 +285,6 @@ export default function MindLogPage() {
     setIsDrawerOpen(false);
   };
 
-  // 編輯
   const handleStartEdit = (record: MoodRecord & { category?: string }) => {
     setEditingRecordId(record.id!);
     setSelectedCategory(record.category || 'daily');
@@ -243,7 +306,6 @@ export default function MindLogPage() {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
-  // 取消編輯
   const handleCancelEdit = () => {
     setEditingRecordId(null);
     setNote('');
@@ -254,7 +316,6 @@ export default function MindLogPage() {
     setIsDrawerOpen(false);
   };
 
-  // 刪除
   const handleDelete = async (record: MoodRecord) => {
     if (window.confirm(`確定要刪除 ${record.dateStr} 的這篇隨筆嗎？`)) {
       if (record.id) {
@@ -266,7 +327,6 @@ export default function MindLogPage() {
     }
   };
 
-  // 日期快捷跳轉
   const handleShiftDate = (days: number) => {
     const baseDate = filterDate ? new Date(filterDate) : new Date();
     baseDate.setDate(baseDate.getDate() + days);
@@ -277,10 +337,124 @@ export default function MindLogPage() {
     }
   };
 
-  // 表單核心組件（手機抽屜與 PC 側邊欄共用此渲染邏輯）
+  // 🌿 橫幅封面元件（含文字自訂、相片上傳與對比度遮罩）
+  const renderHeaderBanner = (isMobile = false) => {
+    const hasBg = !!headerConfig.bgImageUrl;
+
+    return (
+      <div 
+        className={`relative overflow-hidden transition-all duration-300 ${
+          isMobile 
+            ? 'w-full h-32 md:hidden' 
+            : 'w-full rounded-2xl mb-5 shadow-sm'
+        } ${!hasBg ? 'bg-gradient-to-r from-slate-900 to-slate-800 text-white' : ''}`}
+        style={hasBg ? {
+          backgroundImage: `url(${headerConfig.bgImageUrl})`,
+          backgroundSize: 'cover',
+          backgroundPosition: 'center',
+        } : {}}
+      >
+        {/* 對比度保護暗色漸層遮罩 */}
+        {hasBg && (
+          <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/45 to-black/30 pointer-events-none" />
+        )}
+
+        {/* 橫幅內容 */}
+        <div className={`relative z-10 flex flex-col justify-between h-full p-4 ${isMobile ? 'h-32' : 'min-h-[120px]'}`}>
+          {/* 上排功能鍵：自訂 Title & 更換相片 */}
+          <div className="flex items-center justify-between">
+            <span className="text-[10px] font-mono tracking-widest uppercase bg-black/40 backdrop-blur-sm text-slate-200 px-2 py-0.5 rounded-full border border-white/10">
+              {APP_VERSION}
+            </span>
+
+            <div className="flex items-center gap-1.5">
+              <button
+                type="button"
+                onClick={() => headerFileRef.current?.click()}
+                className="p-1.5 rounded-lg bg-black/40 hover:bg-black/60 text-white backdrop-blur-sm border border-white/15 transition-all text-xs flex items-center gap-1"
+                title="上傳自訂背景相片"
+              >
+                <ImageIcon className="w-3.5 h-3.5 text-emerald-400" />
+                <span className="text-[10px] hidden sm:inline">換封面</span>
+              </button>
+              <input 
+                ref={headerFileRef} 
+                type="file" 
+                accept="image/*" 
+                className="hidden" 
+                onChange={handleCoverUpload} 
+              />
+
+              {hasBg && (
+                <button
+                  type="button"
+                  onClick={handleResetHeader}
+                  className="p-1.5 rounded-lg bg-black/40 hover:bg-rose-900/60 text-white backdrop-blur-sm border border-white/15 transition-all"
+                  title="還原預設底色"
+                >
+                  <ResetIcon className="w-3.5 h-3.5 text-slate-300 hover:text-rose-400" />
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* 下排：標題文字（支援就地編輯） */}
+          <div className="mt-auto">
+            {!isEditingHeader ? (
+              <div className="flex items-center justify-between group">
+                <div 
+                  onClick={() => {
+                    setTempTitle(headerConfig.title);
+                    setIsEditingHeader(true);
+                  }}
+                  className="flex items-center gap-2 cursor-pointer"
+                  title="點擊修改日記名稱"
+                >
+                  <h1 className="text-xl md:text-2xl font-black tracking-tight text-white drop-shadow-md">
+                    🌿 {headerConfig.title}
+                  </h1>
+                  <Edit3 className="w-3.5 h-3.5 text-white/60 opacity-0 group-hover:opacity-100 transition-opacity" />
+                </div>
+                <span className="text-xs text-white/80 font-medium drop-shadow">
+                  共 {entries?.length || 0} 篇
+                </span>
+              </div>
+            ) : (
+              <div className="flex items-center gap-2 bg-black/60 backdrop-blur-md p-1.5 rounded-xl border border-white/20">
+                <input
+                  type="text"
+                  maxLength={15}
+                  value={tempTitle}
+                  onChange={(e) => setTempTitle(e.target.value)}
+                  placeholder="輸入自訂標題..."
+                  className="bg-transparent text-sm font-bold text-white outline-none w-full px-1"
+                  autoFocus
+                />
+                <button
+                  type="button"
+                  onClick={handleSaveTitle}
+                  className="p-1 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg"
+                >
+                  <Check className="w-4 h-4" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setIsEditingHeader(false)}
+                  className="p-1 bg-slate-700 hover:bg-slate-600 text-white rounded-lg"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  // 表單核心組件（手機抽屜與 PC 側邊欄共用）
   const renderEditorForm = () => (
     <div className="space-y-4">
-      {/* 編輯指示條 */}
       {editingRecordId && (
         <div className="bg-amber-100 border border-amber-300 text-amber-900 px-3 py-1.5 rounded-xl flex items-center justify-between text-xs">
           <span className="font-semibold flex items-center gap-1">
@@ -422,7 +596,7 @@ export default function MindLogPage() {
         )}
       </div>
 
-      {/* 隨筆輸入框 */}
+      {/* 隨筆文字 */}
       <div>
         <textarea
           rows={3}
@@ -455,41 +629,27 @@ export default function MindLogPage() {
   return (
     <div className="min-h-screen bg-slate-100 text-slate-800 font-sans flex flex-col md:flex-row">
       
-      {/* ──────────────── 💻 PC 端經典左側固定面板 (手機端 md: 隱藏) ──────────────── */}
+      {/* ──────────────── 💻 PC 端經典左側固定面板 (包含 PC 專屬橫幅) ──────────────── */}
       <aside className="hidden md:flex w-96 bg-white border-r border-slate-200 p-5 flex-col justify-between shrink-0 shadow-sm h-screen sticky top-0 overflow-y-auto">
         <div>
-          <div className="flex items-center justify-between mb-5 pb-3 border-b border-slate-100">
-            <h1 className="text-xl font-bold tracking-tight text-slate-900 flex items-center gap-2">
-              🌿 <span>MindLog</span>
-            </h1>
-            <span className="text-xs font-mono bg-blue-50 text-blue-600 px-2 py-0.5 rounded border border-blue-200">
-              {APP_VERSION}
-            </span>
-          </div>
+          {/* PC 頂部自訂橫幅 */}
+          {renderHeaderBanner(false)}
           {renderEditorForm()}
         </div>
 
         <div className="pt-4 border-t border-slate-100 flex items-center justify-between text-xs text-slate-400">
-          <span>PC / 手機自適應架構</span>
-          <span>共 {entries?.length || 0} 篇</span>
+          <span>PC / 手機自適應橫幅</span>
+          <span>{APP_VERSION}</span>
         </div>
       </aside>
 
-      {/* ──────────────── 📱+💻 主時間軸區塊 (手機全螢幕 / PC 寬闊右側) ──────────────── */}
+      {/* ──────────────── 📱+💻 主時間軸區塊 (手機滿版橫幅置頂) ──────────────── */}
       <div className="flex-1 flex flex-col min-h-screen">
         
-        {/* 手機專屬頂部常駐標題列 */}
-        <header className="md:hidden bg-white/95 backdrop-blur-md sticky top-0 z-30 border-b border-slate-200 px-4 py-3 flex items-center justify-between shadow-sm">
-          <h1 className="text-base font-bold text-slate-900 flex items-center gap-1.5">
-            🌿 <span>MindLog</span>
-          </h1>
-          <div className="flex items-center gap-2 text-xs">
-            <span className="text-slate-400">共 {entries?.length || 0} 篇</span>
-            <span className="font-mono bg-blue-50 text-blue-600 px-1.5 py-0.5 rounded text-[10px]">{APP_VERSION}</span>
-          </div>
-        </header>
+        {/* 手機專屬頂部橫幅封面 (置頂滿版) */}
+        {renderHeaderBanner(true)}
 
-        {/* 時間軸主要容器 (手機保留底距 pb-36 避免遮擋，PC 為常規 pb-8) */}
+        {/* 時間軸主要容器 */}
         <main className="flex-1 max-w-2xl mx-auto w-full p-4 md:p-8 pb-36 md:pb-8">
           
           {/* 📅 日期與分類綜合過濾工具列 */}
@@ -670,7 +830,7 @@ export default function MindLogPage() {
           </div>
         </main>
 
-        {/* ──────────────── 📱 手機端專屬：吸底拇指常駐抽屜 (PC 端 md: 隱藏) ──────────────── */}
+        {/* ──────────────── 📱 手機端專屬：吸底拇指常駐抽屜 ──────────────── */}
         <section className={`md:hidden fixed bottom-0 left-0 right-0 z-40 bg-white border-t border-slate-200/90 shadow-[0_-8px_30px_rgba(0,0,0,0.12)] transition-all duration-300 rounded-t-3xl max-w-2xl mx-auto ${
           isDrawerOpen ? 'max-h-[85vh] overflow-y-auto' : 'max-h-20'
         } ${editingRecordId ? 'ring-2 ring-amber-400' : ''}`}>
