@@ -6,11 +6,28 @@ import imageCompression from 'browser-image-compression';
 import { 
   Smile, Frown, Meh, Laugh, Angry, 
   Camera, MapPin, Send, Trash2, Calendar as CalendarIcon, 
-  Clock, Edit3, X, ChevronLeft, ChevronRight, RotateCcw, Check
+  Clock, Edit3, X, ChevronLeft, ChevronRight, RotateCcw, Check,
+  Tag
 } from 'lucide-react';
 import { db, MoodRecord, PhotoData, PhotoTag } from '@/lib/db';
 
-const APP_VERSION = 'Ver. 001.002.000';
+const APP_VERSION = 'Ver. 001.003.000';
+
+// 🏷️ 日記分類定義
+interface CategoryOption {
+  id: string;
+  label: string;
+  icon: string;
+  tagColor: string; // 時間軸卡片上的柔和標籤色
+}
+
+const CATEGORIES: CategoryOption[] = [
+  { id: 'daily', label: '日常隨筆', icon: '🌱', tagColor: 'bg-emerald-50 text-emerald-700 border-emerald-200' },
+  { id: 'work', label: '工作學習', icon: '💼', tagColor: 'bg-blue-50 text-blue-700 border-blue-200' },
+  { id: 'travel', label: '旅行美食', icon: '✈️', tagColor: 'bg-amber-50 text-amber-700 border-amber-200' },
+  { id: 'idea', label: '靈感想法', icon: '💡', tagColor: 'bg-purple-50 text-purple-700 border-purple-200' },
+  { id: 'health', label: '健康運動', icon: '🏃', tagColor: 'bg-rose-50 text-rose-700 border-rose-200' },
+];
 
 const MOODS: { level: 1 | 2 | 3 | 4 | 5; label: string; icon: any; color: string }[] = [
   { level: 5, label: '雀躍', icon: Laugh, color: 'text-amber-500 hover:bg-amber-50' },
@@ -24,27 +41,36 @@ export default function MindLogPage() {
   const todayStr = new Date().toISOString().split('T')[0];
 
   const [selectedMood, setSelectedMood] = useState<1 | 2 | 3 | 4 | 5>(3);
+  const [selectedCategory, setSelectedCategory] = useState<string>('daily');
   const [note, setNote] = useState('');
   const [stagedPhoto, setStagedPhoto] = useState<PhotoData | null>(null);
   const [tempTagCaption, setTempTagCaption] = useState('');
   const [pendingTagPos, setPendingTagPos] = useState<{ x: number; y: number } | null>(null);
 
-  // 📅 新增/編輯所指定的記錄日期（支援補登過去日期）
+  // 📅 新增/編輯所指定的記錄日期
   const [targetRecordDate, setTargetRecordDate] = useState<string>(todayStr);
 
   // 📝 編輯狀態管理
   const [editingRecordId, setEditingRecordId] = useState<number | null>(null);
 
-  // 📅 日期過濾狀態管理 (空字串代表顯示全部)
+  // 🔍 篩選狀態管理 (日期 + 分類)
   const [filterDate, setFilterDate] = useState<string>('');
+  const [filterCategory, setFilterCategory] = useState<string>('all');
 
-  // 即時讀取本機日記串流 (支援指定日期查詢與全量排序)
+  // 即時讀取本機日記串流 (支援日期與分類雙重交集查詢)
   const entries = useLiveQuery(async () => {
+    let list: MoodRecord[] = [];
     if (filterDate) {
-      return db.records.where('dateStr').equals(filterDate).reverse().sortBy('timestamp');
+      list = await db.records.where('dateStr').equals(filterDate).reverse().sortBy('timestamp');
+    } else {
+      list = await db.records.orderBy('timestamp').reverse().toArray();
     }
-    return db.records.orderBy('timestamp').reverse().toArray();
-  }, [filterDate]);
+
+    if (filterCategory !== 'all') {
+      list = list.filter((item) => (item.category || 'daily') === filterCategory);
+    }
+    return list;
+  }, [filterDate, filterCategory]);
 
   // 1. 照片壓縮與預覽
   const handlePhotoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -92,13 +118,11 @@ export default function MindLogPage() {
     setTempTagCaption('');
   };
 
-  // 4. 提交或更新日記 (支援指定過去/自訂日期)
+  // 4. 提交或更新日記
   const handleSubmit = async () => {
     if (!note.trim() && !stagedPhoto) return;
 
-    const moodObj = MOODS.find(m => m.level === selectedMood)!;
-    
-    // 依據指定的日期產生時間戳記與顯示字串
+    const moodObj = MOODS.find((m) => m.level === selectedMood)!;
     const assignedDate = new Date(`${targetRecordDate}T12:00:00`);
     const dateStr = targetRecordDate;
 
@@ -106,6 +130,7 @@ export default function MindLogPage() {
       // ✏️ 更新既有記事
       await db.records.update(editingRecordId, {
         dateStr,
+        category: selectedCategory,
         moodLevel: selectedMood,
         moodLabel: moodObj.label,
         note: note.trim(),
@@ -114,10 +139,11 @@ export default function MindLogPage() {
       });
       setEditingRecordId(null);
     } else {
-      // ➕ 新增記事 (支援補登過去日期)
+      // ➕ 新增記事
       const newRecord: MoodRecord = {
         timestamp: assignedDate.getTime(),
         dateStr,
+        category: selectedCategory,
         moodLevel: selectedMood,
         moodLabel: moodObj.label,
         note: note.trim(),
@@ -133,11 +159,13 @@ export default function MindLogPage() {
     setStagedPhoto(null);
     setPendingTagPos(null);
     setTargetRecordDate(filterDate || todayStr);
+    setSelectedCategory('daily');
   };
 
   // 5. 載入記事進入編輯模式
   const handleStartEdit = (record: MoodRecord) => {
     setEditingRecordId(record.id!);
+    setSelectedCategory(record.category || 'daily');
     setSelectedMood(record.moodLevel);
     setNote(record.note);
     setTargetRecordDate(record.dateStr);
@@ -162,9 +190,10 @@ export default function MindLogPage() {
     setStagedPhoto(null);
     setPendingTagPos(null);
     setTargetRecordDate(filterDate || todayStr);
+    setSelectedCategory('daily');
   };
 
-  // 7. 刪除記事 (含防誤觸二次確認)
+  // 7. 刪除記事
   const handleDelete = async (record: MoodRecord) => {
     if (window.confirm(`確定要刪除 ${record.dateStr} 的這篇心情隨筆嗎？\n此動作無法復原。`)) {
       if (record.id) {
@@ -176,7 +205,7 @@ export default function MindLogPage() {
     }
   };
 
-  // 8. 右側時間軸日期快速導覽 (前一天 / 後一天)
+  // 8. 時間軸日期快速導覽
   const handleShiftDate = (days: number) => {
     const baseDate = filterDate ? new Date(filterDate) : new Date();
     baseDate.setDate(baseDate.getDate() + days);
@@ -244,6 +273,33 @@ export default function MindLogPage() {
                 onChange={(e) => setTargetRecordDate(e.target.value)}
                 className="bg-transparent text-xs font-semibold text-slate-800 outline-none w-full cursor-pointer"
               />
+            </div>
+          </div>
+
+          {/* 🏷️ 選擇隨筆分類 */}
+          <div className="mb-4">
+            <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider block mb-2">
+              記事分類
+            </label>
+            <div className="flex flex-wrap gap-1.5">
+              {CATEGORIES.map((cat) => {
+                const isSelected = selectedCategory === cat.id;
+                return (
+                  <button
+                    key={cat.id}
+                    type="button"
+                    onClick={() => setSelectedCategory(cat.id)}
+                    className={`px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all flex items-center gap-1 border ${
+                      isSelected
+                        ? 'bg-blue-600 text-white border-blue-600 shadow-sm scale-105 font-bold'
+                        : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'
+                    }`}
+                  >
+                    <span>{cat.icon}</span>
+                    <span>{cat.label}</span>
+                  </button>
+                );
+              })}
             </div>
           </div>
 
@@ -388,74 +444,109 @@ export default function MindLogPage() {
 
         {/* 底部狀態列 */}
         <div className="pt-4 border-t border-slate-100 flex items-center justify-between text-xs text-slate-400">
-          <span>支援回溯歷史記錄</span>
+          <span>支援多分類整理隨筆</span>
           <span className="font-mono">{APP_VERSION}</span>
         </div>
       </aside>
 
-      {/* ──────────────── 右側主內容：心情時間軸與日期過濾 ──────────────── */}
+      {/* ──────────────── 右側主內容：心情時間軸與過濾區 ──────────────── */}
       <main className="flex-1 max-w-2xl mx-auto w-full p-4 md:p-8">
         
-        {/* 📅 指定日期過濾工具列 */}
-        <div className="bg-white rounded-2xl p-3.5 border border-slate-200/90 shadow-sm mb-6 flex flex-col sm:flex-row items-center justify-between gap-3">
-          <div className="flex items-center gap-2 w-full sm:w-auto justify-between sm:justify-start">
-            <button
-              onClick={() => handleShiftDate(-1)}
-              className="p-1.5 rounded-lg border border-slate-200 hover:bg-slate-50 text-slate-600"
-              title="前一天"
-            >
-              <ChevronLeft className="w-4 h-4" />
-            </button>
+        {/* 📅 日期與分類綜合過濾工具列 */}
+        <div className="bg-white rounded-2xl p-3.5 border border-slate-200/90 shadow-sm mb-6 space-y-3">
+          
+          {/* 上半部：日期跳轉 */}
+          <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pb-3 border-b border-slate-100">
+            <div className="flex items-center gap-2 w-full sm:w-auto justify-between sm:justify-start">
+              <button
+                onClick={() => handleShiftDate(-1)}
+                className="p-1.5 rounded-lg border border-slate-200 hover:bg-slate-50 text-slate-600"
+                title="前一天"
+              >
+                <ChevronLeft className="w-4 h-4" />
+              </button>
 
-            <div className="flex items-center gap-1.5">
-              <CalendarIcon className="w-4 h-4 text-blue-600" />
-              <input
-                type="date"
-                value={filterDate}
-                onChange={(e) => {
-                  const val = e.target.value;
-                  setFilterDate(val);
-                  if (val && !editingRecordId) {
-                    setTargetRecordDate(val);
-                  }
-                }}
-                className="text-xs font-semibold text-slate-700 border border-slate-200 rounded-lg px-2 py-1 outline-none focus:border-blue-500"
-              />
+              <div className="flex items-center gap-1.5">
+                <CalendarIcon className="w-4 h-4 text-blue-600" />
+                <input
+                  type="date"
+                  value={filterDate}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setFilterDate(val);
+                    if (val && !editingRecordId) {
+                      setTargetRecordDate(val);
+                    }
+                  }}
+                  className="text-xs font-semibold text-slate-700 border border-slate-200 rounded-lg px-2 py-1 outline-none focus:border-blue-500"
+                />
+              </div>
+
+              <button
+                onClick={() => handleShiftDate(1)}
+                className="p-1.5 rounded-lg border border-slate-200 hover:bg-slate-50 text-slate-600"
+                title="後一天"
+              >
+                <ChevronRight className="w-4 h-4" />
+              </button>
             </div>
 
-            <button
-              onClick={() => handleShiftDate(1)}
-              className="p-1.5 rounded-lg border border-slate-200 hover:bg-slate-50 text-slate-600"
-              title="後一天"
-            >
-              <ChevronRight className="w-4 h-4" />
-            </button>
+            <div className="flex items-center gap-2 w-full sm:w-auto justify-end text-xs">
+              <button
+                onClick={() => {
+                  setFilterDate(todayStr);
+                  if (!editingRecordId) setTargetRecordDate(todayStr);
+                }}
+                className={`px-2.5 py-1 rounded-lg border transition ${
+                  filterDate === todayStr
+                    ? 'bg-blue-50 text-blue-600 border-blue-200 font-semibold'
+                    : 'border-slate-200 text-slate-600 hover:bg-slate-50'
+                }`}
+              >
+                今天
+              </button>
+              <button
+                onClick={() => setFilterDate('')}
+                className={`px-2.5 py-1 rounded-lg border transition flex items-center gap-1 ${
+                  !filterDate
+                    ? 'bg-blue-600 text-white border-blue-600 font-semibold shadow-sm'
+                    : 'border-slate-200 text-slate-600 hover:bg-slate-50'
+                }`}
+              >
+                <RotateCcw className="w-3 h-3" /> 全部日期
+              </button>
+            </div>
           </div>
 
-          <div className="flex items-center gap-2 w-full sm:w-auto justify-end text-xs">
+          {/* 下半部：分類切換膠囊列 */}
+          <div className="flex items-center gap-1.5 overflow-x-auto pb-1 text-xs">
+            <span className="text-slate-400 font-medium whitespace-nowrap mr-1 flex items-center gap-1">
+              <Tag className="w-3 h-3" /> 分類:
+            </span>
             <button
-              onClick={() => {
-                setFilterDate(todayStr);
-                if (!editingRecordId) setTargetRecordDate(todayStr);
-              }}
-              className={`px-2.5 py-1 rounded-lg border transition ${
-                filterDate === todayStr
-                  ? 'bg-blue-50 text-blue-600 border-blue-200 font-semibold'
-                  : 'border-slate-200 text-slate-600 hover:bg-slate-50'
+              onClick={() => setFilterCategory('all')}
+              className={`px-2.5 py-1 rounded-lg font-medium whitespace-nowrap transition border ${
+                filterCategory === 'all'
+                  ? 'bg-slate-900 text-white border-slate-900 shadow-sm'
+                  : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'
               }`}
             >
-              今天
+              全部
             </button>
-            <button
-              onClick={() => setFilterDate('')}
-              className={`px-2.5 py-1 rounded-lg border transition flex items-center gap-1 ${
-                !filterDate
-                  ? 'bg-blue-600 text-white border-blue-600 font-semibold shadow-sm'
-                  : 'border-slate-200 text-slate-600 hover:bg-slate-50'
-              }`}
-            >
-              <RotateCcw className="w-3 h-3" /> 顯示全部
-            </button>
+            {CATEGORIES.map((cat) => (
+              <button
+                key={cat.id}
+                onClick={() => setFilterCategory(cat.id)}
+                className={`px-2.5 py-1 rounded-lg font-medium whitespace-nowrap transition border flex items-center gap-1 ${
+                  filterCategory === cat.id
+                    ? 'bg-blue-600 text-white border-blue-600 shadow-sm'
+                    : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'
+                }`}
+              >
+                <span>{cat.icon}</span>
+                <span>{cat.label}</span>
+              </button>
+            ))}
           </div>
         </div>
 
@@ -463,7 +554,12 @@ export default function MindLogPage() {
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-base font-bold text-slate-900 flex items-center gap-2">
             <Clock className="w-4 h-4 text-slate-500" /> 
-            {filterDate ? `指定日期：${filterDate}` : '完整時間軸'}
+            {filterDate ? `指定日期：${filterDate}` : '隨筆時間軸'}
+            {filterCategory !== 'all' && (
+              <span className="text-xs font-normal text-slate-500 bg-slate-200/80 px-2 py-0.5 rounded-full">
+                {CATEGORIES.find((c) => c.id === filterCategory)?.label}
+              </span>
+            )}
           </h2>
           <span className="text-xs text-slate-400">共 {entries?.length || 0} 篇記錄</span>
         </div>
@@ -471,7 +567,8 @@ export default function MindLogPage() {
         {/* 日記清單 */}
         <div className="space-y-4">
           {entries?.map((record) => {
-            const mood = MOODS.find(m => m.level === record.moodLevel);
+            const mood = MOODS.find((m) => m.level === record.moodLevel);
+            const categoryObj = CATEGORIES.find((c) => c.id === (record.category || 'daily')) || CATEGORIES[0];
             const Icon = mood?.icon || Meh;
             const isEditing = editingRecordId === record.id;
 
@@ -490,8 +587,13 @@ export default function MindLogPage() {
                     <span className="text-sm font-semibold text-slate-800">{record.moodLabel}</span>
                   </div>
                   
-                  {/* 右上角：日期標籤與操作工具 (編輯/刪除) */}
+                  {/* 右上角：分類標籤、日期與操作工具 */}
                   <div className="flex items-center gap-2">
+                    <span className={`text-[11px] font-medium px-2 py-0.5 rounded-md border flex items-center gap-0.5 ${categoryObj.tagColor}`}>
+                      <span>{categoryObj.icon}</span>
+                      <span>{categoryObj.label}</span>
+                    </span>
+
                     <span className="text-xs font-medium text-slate-500 bg-slate-100 px-2 py-0.5 rounded">
                       {record.dateStr}
                     </span>
@@ -555,7 +657,9 @@ export default function MindLogPage() {
             <div className="text-center py-16 text-slate-400 border border-dashed rounded-2xl bg-white/50">
               <CalendarIcon className="w-8 h-8 mx-auto mb-2 opacity-40" />
               <p className="text-sm">
-                {filterDate ? `${filterDate} 尚無任何心情記錄` : '尚無心情紀錄，隨時拍下第一張照片吧！'}
+                {filterDate || filterCategory !== 'all' 
+                  ? '目前篩選條件下尚無任何心情記錄' 
+                  : '尚無心情紀錄，隨時拍下第一張照片吧！'}
               </p>
             </div>
           )}
