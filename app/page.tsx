@@ -13,7 +13,7 @@ import {
 import { db, MoodRecord, PhotoData, PhotoTag } from '@/lib/db';
 import { supabase } from '@/lib/supabase';
 
-const APP_VERSION = 'Ver. 001.008.002';
+const APP_VERSION = 'Ver. 001.008.003';
 const DEFAULT_TITLE = 'MindLog';
 const SYNC_ROW_ID = 'user_mindlog_store';
 
@@ -84,7 +84,7 @@ export default function MindLogPage() {
   // ☁️ 雲端同步狀態
   const [syncStatus, setSyncStatus] = useState<'synced' | 'syncing' | 'error'>('synced');
 
-  // 🌿 Title、封面與頭像設定
+  // 🌿 標題、封面與頭像設定
   const [headerConfig, setHeaderConfig] = useState<HeaderConfig>({
     title: DEFAULT_TITLE,
     bgImageUrl: null,
@@ -109,30 +109,29 @@ export default function MindLogPage() {
   const [tempTagCaption, setTempTagCaption] = useState('');
   const [pendingTagPos, setPendingTagPos] = useState<{ x: number; y: number } | null>(null);
 
-  // 📅 新增/編輯所指定的記錄日期
+  // 📅 記錄日期
   const [targetRecordDate, setTargetRecordDate] = useState<string>(todayStr);
 
-  // 📝 編輯狀態管理
+  // 📝 編輯狀態
   const [editingRecordId, setEditingRecordId] = useState<number | null>(null);
 
-  // 🔍 篩選狀態管理 (日期 + 分類)
+  // 🔍 篩選狀態 (日期 + 分類)
   const [filterDate, setFilterDate] = useState<string>('');
   const [filterCategory, setFilterCategory] = useState<string>('all');
 
-  // 1. 初次載入與 Supabase 雲端資料同步 (含除錯日誌)
+  // 1. 初次載入與 Supabase 雲端資料同步
   useEffect(() => {
     appendLog(`系統初始化啟動: ${APP_VERSION}`);
 
-    // 本地快取預載
     const savedHeader = localStorage.getItem('mindlog_header_config');
     if (savedHeader) {
       try {
         const parsed = JSON.parse(savedHeader);
         setHeaderConfig(parsed);
         setTempTitle(parsed.title || DEFAULT_TITLE);
-        appendLog(`讀取本地 Header 快取: 標題=[${parsed.title}], 封面=${parsed.bgImageUrl ? `有(${parsed.bgImageUrl.length}字元)` : '無'}`);
+        appendLog(`本地 Header 快取載入: [${parsed.title}], 封面=${parsed.bgImageUrl ? `有(${Math.round(parsed.bgImageUrl.length / 1024)}KB)` : '無'}`);
       } catch (e) {
-        appendLog(`讀取本地 Header 快取異常: ${e}`);
+        appendLog(`讀取本地 Header 失敗: ${e}`);
       }
     }
 
@@ -149,7 +148,7 @@ export default function MindLogPage() {
     const pullFromCloud = async () => {
       try {
         setSyncStatus('syncing');
-        appendLog('開始自 Supabase 拉取最新雲端備份...');
+        appendLog('開始自 Supabase 拉取最新備份...');
         const { data, error } = await supabase
           .from('mindlog_sync')
           .select('*')
@@ -163,7 +162,7 @@ export default function MindLogPage() {
         }
 
         if (data) {
-          appendLog(`✅ 成功連線 Supabase，最後更新時間: ${data.updated_at || '未知'}`);
+          appendLog(`✅ Supabase 連線成功，雲端更新時間: ${data.updated_at || '未知'}`);
           if (data.settings) {
             const cloudSettings: HeaderConfig = {
               title: data.settings.title || DEFAULT_TITLE,
@@ -173,12 +172,13 @@ export default function MindLogPage() {
             setHeaderConfig(cloudSettings);
             setTempTitle(cloudSettings.title);
             localStorage.setItem('mindlog_header_config', JSON.stringify(cloudSettings));
-            appendLog(`雲端封面圖片狀態: ${cloudSettings.bgImageUrl ? `已成功拉取 (大小約 ${Math.round(cloudSettings.bgImageUrl.length / 1024)} KB)` : '雲端無封面圖片'}`);
-          }
+            appendLog(`封面狀態: ${cloudSettings.bgImageUrl ? `已成功拉取 (約 ${Math.round(cloudSettings.bgImageUrl.length / 1024)} KB)` : '雲端無封面'}`);
 
-          if (data.categories && Array.isArray(data.categories)) {
-            setCategories(data.categories);
-            localStorage.setItem('mindlog_custom_categories', JSON.stringify(data.categories));
+            // 自 settings.customCategories 解析分類
+            if (data.settings.customCategories && Array.isArray(data.settings.customCategories)) {
+              setCategories(data.settings.customCategories);
+              localStorage.setItem('mindlog_custom_categories', JSON.stringify(data.settings.customCategories));
+            }
           }
 
           if (data.entries && Array.isArray(data.entries)) {
@@ -194,10 +194,10 @@ export default function MindLogPage() {
                 photos: restoredPhotos
               });
             }
-            appendLog(`成功同步隨筆日記: 共 ${cloudRecords.length} 篇`);
+            appendLog(`成功同步隨筆: 共 ${cloudRecords.length} 篇`);
           }
         } else {
-          appendLog('雲端尚無備份資料');
+          appendLog('雲端無備份資料');
         }
         setSyncStatus('synced');
       } catch (err: any) {
@@ -209,13 +209,13 @@ export default function MindLogPage() {
     pullFromCloud();
   }, []);
 
-  // 2. 將設定與資料推送到 Supabase
+  // 2. 將設定與資料推送到 Supabase (將分類收納於 settings 避免 PGRST204)
   const pushToCloud = async (newSettings?: HeaderConfig, newCategories?: CategoryOption[]) => {
     try {
       setSyncStatus('syncing');
       const curSettings = newSettings || headerConfig;
       const curCategories = newCategories || categories;
-      appendLog(`開始推送至 Supabase: 封面圖=${curSettings.bgImageUrl ? `包含 (${Math.round(curSettings.bgImageUrl.length / 1024)} KB)` : '無'}`);
+      appendLog(`推送至 Supabase: 封面=${curSettings.bgImageUrl ? `包含 (${Math.round(curSettings.bgImageUrl.length / 1024)} KB)` : '無'}`);
 
       const allLocalRecords = await db.records.toArray();
       const serializableEntries = await Promise.all(
@@ -232,10 +232,14 @@ export default function MindLogPage() {
         })
       );
 
+      const payloadSettings = {
+        ...curSettings,
+        customCategories: curCategories,
+      };
+
       const { error } = await supabase.from('mindlog_sync').upsert({
         id: SYNC_ROW_ID,
-        settings: curSettings,
-        categories: curCategories,
+        settings: payloadSettings,
         entries: serializableEntries,
         updated_at: new Date().toISOString()
       });
@@ -245,10 +249,10 @@ export default function MindLogPage() {
         throw error;
       }
 
-      appendLog('✅ Supabase 雲端資料庫寫入成功！封面圖與資料已同步');
+      appendLog('✅ Supabase 同步成功！封面與分類已更新');
       setSyncStatus('synced');
     } catch (err: any) {
-      appendLog(`❌ 同步過程拋出例外: ${err?.message || err}`);
+      appendLog(`❌ 同步拋出例外: ${err?.message || err}`);
       setSyncStatus('error');
     }
   };
@@ -259,16 +263,16 @@ export default function MindLogPage() {
     await pushToCloud(newConfig);
   };
 
-  // 🖼️ 封面圖片選取與壓縮 (強化控制在 120KB 以內確保迅速推送)
+  // 🖼️ 封面圖片選取與壓縮
   const handleCoverUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
     try {
-      appendLog(`選取新封面檔案: ${file.name} (${Math.round(file.size / 1024)} KB)，正在前端壓縮...`);
+      appendLog(`選取封面: ${file.name} (${Math.round(file.size / 1024)} KB)，壓縮中...`);
       const options = { maxSizeMB: 0.15, maxWidthOrHeight: 1000, useWebWorker: true };
       const compressedBlob = await imageCompression(file, options);
-      appendLog(`封面壓縮完成: 檔案縮小至 ${Math.round(compressedBlob.size / 1024)} KB`);
+      appendLog(`封面壓縮完成: 縮減至 ${Math.round(compressedBlob.size / 1024)} KB`);
 
       const reader = new FileReader();
       reader.onloadend = async () => {
@@ -278,7 +282,7 @@ export default function MindLogPage() {
       };
       reader.readAsDataURL(compressedBlob);
     } catch (err: any) {
-      appendLog(`❌ 封面照片壓縮錯誤: ${err?.message || err}`);
+      appendLog(`❌ 封面壓縮錯誤: ${err?.message || err}`);
     }
   };
 
@@ -304,7 +308,7 @@ export default function MindLogPage() {
   };
 
   const handleResetHeader = async () => {
-    if (window.confirm('確定要還原預設標題、頭像與底色嗎？此設定將同步至所有裝置。')) {
+    if (window.confirm('確定要還原預設外觀嗎？此設定將同步至所有裝置。')) {
       const defConfig: HeaderConfig = { title: DEFAULT_TITLE, bgImageUrl: null, avatarUrl: null };
       setTempTitle(DEFAULT_TITLE);
       setIsEditingHeader(false);
@@ -870,7 +874,7 @@ export default function MindLogPage() {
   return (
     <div className="min-h-screen bg-slate-100 text-slate-800 font-sans flex flex-col md:flex-row">
       
-      {/* ──────────────── 💻 PC 端經典左側固定面板 ──────────────── */}
+      {/* ──────────────── 💻 PC 端左側固定面板 ──────────────── */}
       <aside className="hidden md:flex w-96 bg-white border-r border-slate-200 p-5 flex-col justify-between shrink-0 shadow-sm h-screen sticky top-0 overflow-y-auto">
         <div>
           {renderHeaderBanner(false)}
