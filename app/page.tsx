@@ -7,18 +7,17 @@ import {
   Smile, Frown, Meh, Laugh, Angry, 
   Camera, MapPin, Send, Trash2, Calendar as CalendarIcon, 
   Clock, Edit3, X, ChevronLeft, ChevronRight, RotateCcw, Check,
-  Tag
+  Tag, ChevronUp, ChevronDown
 } from 'lucide-react';
 import { db, MoodRecord, PhotoData, PhotoTag } from '@/lib/db';
 
-const APP_VERSION = 'Ver. 001.003.000';
+const APP_VERSION = 'Ver. 001.004.000';
 
-// 🏷️ 日記分類定義
 interface CategoryOption {
   id: string;
   label: string;
   icon: string;
-  tagColor: string; // 時間軸卡片上的柔和標籤色
+  tagColor: string;
 }
 
 const CATEGORIES: CategoryOption[] = [
@@ -40,6 +39,9 @@ const MOODS: { level: 1 | 2 | 3 | 4 | 5; label: string; icon: any; color: string
 export default function MindLogPage() {
   const todayStr = new Date().toISOString().split('T')[0];
 
+  // 抽屜展開/收折狀態 (預設收折)
+  const [isDrawerOpen, setIsDrawerOpen] = useState(false);
+
   const [selectedMood, setSelectedMood] = useState<1 | 2 | 3 | 4 | 5>(3);
   const [selectedCategory, setSelectedCategory] = useState<string>('daily');
   const [note, setNote] = useState('');
@@ -57,7 +59,7 @@ export default function MindLogPage() {
   const [filterDate, setFilterDate] = useState<string>('');
   const [filterCategory, setFilterCategory] = useState<string>('all');
 
-  // 即時讀取本機日記串流 (支援日期與分類雙重交集查詢)
+  // 即時讀取本機日記串流 (支援型別斷言保護)
   const entries = useLiveQuery(async () => {
     let list: (MoodRecord & { category?: string })[] = [];
     if (filterDate) {
@@ -88,6 +90,7 @@ export default function MindLogPage() {
         previewUrl,
         tags: []
       });
+      setIsDrawerOpen(true);
     } catch (err) {
       console.error('照片壓縮失敗:', err);
     }
@@ -127,7 +130,6 @@ export default function MindLogPage() {
     const dateStr = targetRecordDate;
 
     if (editingRecordId) {
-      // ✏️ 更新既有記事
       await db.records.update(editingRecordId, {
         dateStr,
         category: selectedCategory,
@@ -139,7 +141,6 @@ export default function MindLogPage() {
       });
       setEditingRecordId(null);
     } else {
-      // ➕ 新增記事
       const newRecord: MoodRecord = {
         timestamp: assignedDate.getTime(),
         dateStr,
@@ -154,16 +155,16 @@ export default function MindLogPage() {
       await db.records.add(newRecord);
     }
 
-    // 重設表單狀態
     setNote('');
     setStagedPhoto(null);
     setPendingTagPos(null);
     setTargetRecordDate(filterDate || todayStr);
     setSelectedCategory('daily');
+    setIsDrawerOpen(false);
   };
 
   // 5. 載入記事進入編輯模式
-  const handleStartEdit = (record: MoodRecord) => {
+  const handleStartEdit = (record: MoodRecord & { category?: string }) => {
     setEditingRecordId(record.id!);
     setSelectedCategory(record.category || 'daily');
     setSelectedMood(record.moodLevel);
@@ -180,7 +181,8 @@ export default function MindLogPage() {
       setStagedPhoto(null);
     }
 
-    window.scrollTo({ top: 0, behavior: 'smooth' });
+    setIsDrawerOpen(true);
+    window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
   };
 
   // 6. 取消編輯
@@ -191,6 +193,7 @@ export default function MindLogPage() {
     setPendingTagPos(null);
     setTargetRecordDate(filterDate || todayStr);
     setSelectedCategory('daily');
+    setIsDrawerOpen(false);
   };
 
   // 7. 刪除記事
@@ -217,246 +220,29 @@ export default function MindLogPage() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-100 text-slate-800 flex flex-col md:flex-row font-sans">
+    <div className="min-h-screen bg-slate-100 text-slate-800 font-sans flex flex-col justify-between">
       
-      {/* ──────────────── PC 左側固定側邊欄 / 速記區 ──────────────── */}
-      <aside className={`w-full md:w-96 bg-white border-r border-slate-200 p-5 flex flex-col justify-between shrink-0 shadow-sm md:h-screen md:sticky md:top-0 transition-all ${
-        editingRecordId ? 'ring-2 ring-amber-400/80 bg-amber-50/10' : ''
-      }`}>
-        <div>
-          <div className="flex items-center justify-between mb-4">
-            <h1 className="text-xl font-bold tracking-tight text-slate-900 flex items-center gap-2">
-              🌿 <span>MindLog</span>
-            </h1>
+      {/* ──────────────── 1. 頁面上半部：置頂導覽、綜合過濾與時間軸 ──────────────── */}
+      <div className="w-full max-w-2xl mx-auto p-4 md:p-6 pb-36">
+        
+        {/* 置頂標題列 */}
+        <header className="flex items-center justify-between mb-4 pb-2 border-b border-slate-200">
+          <h1 className="text-xl font-bold tracking-tight text-slate-900 flex items-center gap-2">
+            🌿 <span>MindLog</span>
+          </h1>
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-slate-400 font-medium">共 {entries?.length || 0} 篇</span>
             <span className="text-xs font-mono bg-blue-50 text-blue-600 px-2 py-0.5 rounded border border-blue-200">
               {APP_VERSION}
             </span>
           </div>
+        </header>
 
-          {/* 編輯中提示條 */}
-          {editingRecordId && (
-            <div className="mb-4 bg-amber-100 border border-amber-300 text-amber-900 px-3 py-1.5 rounded-xl flex items-center justify-between text-xs">
-              <span className="font-semibold flex items-center gap-1">
-                <Edit3 className="w-3.5 h-3.5 text-amber-600" /> 正在編輯 {targetRecordDate} 的記事
-              </span>
-              <button 
-                onClick={handleCancelEdit}
-                className="text-amber-700 hover:text-amber-900 p-0.5"
-                title="取消編輯"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-          )}
-
-          {/* 📅 指定記錄/補登日期 */}
-          <div className="mb-4">
-            <div className="flex items-center justify-between mb-1.5">
-              <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
-                記錄日期 (可補登過去時間)
-              </label>
-              {targetRecordDate !== todayStr && (
-                <button
-                  type="button"
-                  onClick={() => setTargetRecordDate(todayStr)}
-                  className="text-[11px] text-blue-600 hover:underline"
-                >
-                  切換為今天
-                </button>
-              )}
-            </div>
-            <div className="flex items-center gap-2 bg-slate-50 p-2 rounded-xl border border-slate-200">
-              <CalendarIcon className="w-4 h-4 text-blue-500 ml-1" />
-              <input
-                type="date"
-                value={targetRecordDate}
-                onChange={(e) => setTargetRecordDate(e.target.value)}
-                className="bg-transparent text-xs font-semibold text-slate-800 outline-none w-full cursor-pointer"
-              />
-            </div>
-          </div>
-
-          {/* 🏷️ 選擇隨筆分類 */}
-          <div className="mb-4">
-            <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider block mb-2">
-              記事分類
-            </label>
-            <div className="flex flex-wrap gap-1.5">
-              {CATEGORIES.map((cat) => {
-                const isSelected = selectedCategory === cat.id;
-                return (
-                  <button
-                    key={cat.id}
-                    type="button"
-                    onClick={() => setSelectedCategory(cat.id)}
-                    className={`px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all flex items-center gap-1 border ${
-                      isSelected
-                        ? 'bg-blue-600 text-white border-blue-600 shadow-sm scale-105 font-bold'
-                        : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'
-                    }`}
-                  >
-                    <span>{cat.icon}</span>
-                    <span>{cat.label}</span>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-
-          {/* 心情刻度選擇器 */}
-          <div className="mb-4">
-            <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider block mb-2">當日心情</label>
-            <div className="grid grid-cols-5 gap-1.5 bg-slate-50 p-1.5 rounded-xl border border-slate-200">
-              {MOODS.map((m) => {
-                const IconComponent = m.icon;
-                const isSelected = selectedMood === m.level;
-                return (
-                  <button
-                    key={m.level}
-                    type="button"
-                    onClick={() => setSelectedMood(m.level)}
-                    className={`flex flex-col items-center py-2 rounded-lg transition-all text-xs font-medium ${
-                      isSelected 
-                        ? 'bg-white shadow text-slate-900 font-bold scale-105' 
-                        : 'text-slate-400 hover:text-slate-600'
-                    }`}
-                  >
-                    <IconComponent className={`w-5 h-5 mb-1 ${isSelected ? m.color.split(' ')[0] : ''}`} />
-                    {m.label}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-
-          {/* 照片上傳與釘選預覽區 */}
-          <div className="mb-4">
-            <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider block mb-2">相片紀錄</label>
-            {!stagedPhoto ? (
-              <label className="flex flex-col items-center justify-center border-2 border-dashed border-slate-300 rounded-xl p-4 cursor-pointer hover:border-blue-400 bg-slate-50 transition-colors">
-                <Camera className="w-6 h-6 text-slate-400 mb-1" />
-                <span className="text-xs text-slate-500">拍照或選取照片</span>
-                <input 
-                  type="file" 
-                  accept="image/*" 
-                  capture="environment" 
-                  className="hidden" 
-                  onChange={handlePhotoUpload} 
-                />
-              </label>
-            ) : (
-              <div className="relative border border-slate-200 rounded-xl overflow-hidden bg-black/5">
-                <div 
-                  className="relative cursor-crosshair group"
-                  onClick={handleImageClick}
-                >
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img 
-                    src={stagedPhoto.previewUrl} 
-                    alt="預覽" 
-                    className="w-full h-44 object-cover select-none" 
-                  />
-                  {stagedPhoto.tags.map((tag) => (
-                    <div 
-                      key={tag.id}
-                      style={{ top: `${tag.yPercent}%`, left: `${tag.xPercent}%` }}
-                      className="absolute -translate-x-1/2 -translate-y-1/2 bg-black/75 backdrop-blur-md text-white text-[11px] px-2 py-0.5 rounded-full shadow pointer-events-none flex items-center gap-1"
-                    >
-                      <MapPin className="w-2.5 h-2.5 text-amber-400" />
-                      {tag.caption}
-                    </div>
-                  ))}
-                  <div className="absolute inset-0 bg-black/20 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white text-xs font-medium pointer-events-none">
-                    點擊照片釘選心情氣泡
-                  </div>
-                </div>
-
-                {/* 釘選輸入浮層 */}
-                {pendingTagPos && (
-                  <div className="p-2 bg-white border-t border-slate-200 flex gap-2">
-                    <input 
-                      type="text" 
-                      placeholder="在這處留一句話..." 
-                      value={tempTagCaption}
-                      onChange={(e) => setTempTagCaption(e.target.value)}
-                      className="text-xs flex-1 border border-slate-300 rounded px-2 py-1 outline-none focus:border-blue-500"
-                      autoFocus
-                    />
-                    <button 
-                      onClick={addTagToPhoto} 
-                      className="bg-blue-600 text-white text-xs px-2.5 py-1 rounded font-medium"
-                    >
-                      標記
-                    </button>
-                  </div>
-                )}
-
-                <button 
-                  onClick={() => setStagedPhoto(null)} 
-                  className="absolute top-2 right-2 bg-white/80 backdrop-blur p-1 rounded-full text-slate-700 hover:text-rose-600 shadow"
-                >
-                  <Trash2 className="w-3.5 h-3.5" />
-                </button>
-              </div>
-            )}
-          </div>
-
-          {/* 隨筆內容輸入 */}
-          <div className="mb-4">
-            <textarea
-              rows={3}
-              placeholder="記錄該日的心情隨筆..."
-              value={note}
-              onChange={(e) => setNote(e.target.value)}
-              className="w-full text-sm border border-slate-200 rounded-xl p-3 outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 resize-none"
-            />
-          </div>
-
-          {/* 送出與取消操作按鈕 */}
-          <div className="flex gap-2">
-            {editingRecordId && (
-              <button
-                type="button"
-                onClick={handleCancelEdit}
-                className="flex-1 bg-slate-200 hover:bg-slate-300 text-slate-700 font-medium py-2.5 px-4 rounded-xl transition text-sm"
-              >
-                取消
-              </button>
-            )}
-            <button
-              onClick={handleSubmit}
-              className={`flex-1 text-white font-medium py-2.5 px-4 rounded-xl flex items-center justify-center gap-2 shadow-sm transition text-sm ${
-                editingRecordId ? 'bg-amber-600 hover:bg-amber-700' : 'bg-blue-600 hover:bg-blue-700'
-              }`}
-            >
-              {editingRecordId ? (
-                <>
-                  <Check className="w-4 h-4" /> 儲存修改
-                </>
-              ) : (
-                <>
-                  <Send className="w-4 h-4" /> 儲存至 {targetRecordDate}
-                </>
-              )}
-            </button>
-          </div>
-        </div>
-
-        {/* 底部狀態列 */}
-        <div className="pt-4 border-t border-slate-100 flex items-center justify-between text-xs text-slate-400">
-          <span>支援多分類整理隨筆</span>
-          <span className="font-mono">{APP_VERSION}</span>
-        </div>
-      </aside>
-
-      {/* ──────────────── 右側主內容：心情時間軸與過濾區 ──────────────── */}
-      <main className="flex-1 max-w-2xl mx-auto w-full p-4 md:p-8">
-        
         {/* 📅 日期與分類綜合過濾工具列 */}
-        <div className="bg-white rounded-2xl p-3.5 border border-slate-200/90 shadow-sm mb-6 space-y-3">
+        <div className="bg-white rounded-2xl p-3.5 border border-slate-200/90 shadow-sm mb-5 space-y-3">
           
-          {/* 上半部：日期跳轉 */}
-          <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pb-3 border-b border-slate-100">
+          {/* 上排：日期切換工具 */}
+          <div className="flex flex-col sm:flex-row items-center justify-between gap-2.5 pb-2.5 border-b border-slate-100">
             <div className="flex items-center gap-2 w-full sm:w-auto justify-between sm:justify-start">
               <button
                 onClick={() => handleShiftDate(-1)}
@@ -513,12 +299,12 @@ export default function MindLogPage() {
                     : 'border-slate-200 text-slate-600 hover:bg-slate-50'
                 }`}
               >
-                <RotateCcw className="w-3 h-3" /> 全部日期
+                <RotateCcw className="w-3 h-3" /> 全部
               </button>
             </div>
           </div>
 
-          {/* 下半部：分類切換膠囊列 */}
+          {/* 下排：分類過濾膠囊列 */}
           <div className="flex items-center gap-1.5 overflow-x-auto pb-1 text-xs">
             <span className="text-slate-400 font-medium whitespace-nowrap mr-1 flex items-center gap-1">
               <Tag className="w-3 h-3" /> 分類:
@@ -550,25 +336,24 @@ export default function MindLogPage() {
           </div>
         </div>
 
-        {/* 標題與筆數狀態 */}
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="text-base font-bold text-slate-900 flex items-center gap-2">
-            <Clock className="w-4 h-4 text-slate-500" /> 
+        {/* 筆數狀態與目前過濾標示 */}
+        <div className="flex items-center justify-between mb-3 px-1">
+          <h2 className="text-sm font-bold text-slate-900 flex items-center gap-1.5">
+            <Clock className="w-3.5 h-3.5 text-slate-500" /> 
             {filterDate ? `指定日期：${filterDate}` : '隨筆時間軸'}
             {filterCategory !== 'all' && (
-              <span className="text-xs font-normal text-slate-500 bg-slate-200/80 px-2 py-0.5 rounded-full">
+              <span className="text-xs font-normal text-slate-600 bg-slate-200/80 px-2 py-0.5 rounded-full">
                 {CATEGORIES.find((c) => c.id === filterCategory)?.label}
               </span>
             )}
           </h2>
-          <span className="text-xs text-slate-400">共 {entries?.length || 0} 篇記錄</span>
         </div>
 
-        {/* 日記清單 */}
+        {/* 日記卡片清單 */}
         <div className="space-y-4">
           {entries?.map((record) => {
             const mood = MOODS.find((m) => m.level === record.moodLevel);
-            const categoryObj = CATEGORIES.find((c) => c.id === (record.category || 'daily')) || CATEGORIES[0];
+            const categoryObj = CATEGORIES.find((c) => c.id === ((record as any).category || 'daily')) || CATEGORIES[0];
             const Icon = mood?.icon || Meh;
             const isEditing = editingRecordId === record.id;
 
@@ -587,7 +372,7 @@ export default function MindLogPage() {
                     <span className="text-sm font-semibold text-slate-800">{record.moodLabel}</span>
                   </div>
                   
-                  {/* 右上角：分類標籤、日期與操作工具 */}
+                  {/* 分類膠囊標籤、日期與編輯按鈕 */}
                   <div className="flex items-center gap-2">
                     <span className={`text-[11px] font-medium px-2 py-0.5 rounded-md border flex items-center gap-0.5 ${categoryObj.tagColor}`}>
                       <span>{categoryObj.icon}</span>
@@ -614,7 +399,7 @@ export default function MindLogPage() {
                   </div>
                 </div>
 
-                {/* 相片與照片上的心情釘選氣泡 */}
+                {/* 相片與照片氣泡釘選 */}
                 {record.photos && record.photos.length > 0 && record.photos[0].blob && (
                   <div className="relative rounded-xl overflow-hidden mb-3 border border-slate-100 bg-slate-950">
                     {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -644,7 +429,7 @@ export default function MindLogPage() {
 
                 <div className="mt-3 pt-2 border-t border-slate-100 flex items-center justify-between text-[11px] text-slate-400">
                   <span>
-                    紀錄歸檔日期：{record.dateStr}
+                    紀錄日期：{record.dateStr}
                     {record.updatedAt && ' (已編輯)'}
                   </span>
                   <span className="font-mono text-[10px] text-slate-300">{record.appVersion}</span>
@@ -659,12 +444,168 @@ export default function MindLogPage() {
               <p className="text-sm">
                 {filterDate || filterCategory !== 'all' 
                   ? '目前篩選條件下尚無任何心情記錄' 
-                  : '尚無心情紀錄，隨時拍下第一張照片吧！'}
+                  : '尚無心情紀錄，點擊下方展開開始記錄！'}
               </p>
             </div>
           )}
         </div>
-      </main>
+      </div>
+
+      {/* ──────────────── 2. 頁面下半部：吸底拇指常駐編輯抽屜 ──────────────── */}
+      <section className={`fixed bottom-0 left-0 right-0 z-40 bg-white border-t border-slate-200/90 shadow-[0_-8px_30px_rgba(0,0,0,0.12)] transition-all duration-300 rounded-t-3xl max-w-2xl mx-auto ${
+        isDrawerOpen ? 'max-h-[85vh] overflow-y-auto' : 'max-h-20'
+      } ${editingRecordId ? 'ring-2 ring-amber-400' : ''}`}>
+        
+        {/* 抽屜把手與切換列 */}
+        <div 
+          onClick={() => setIsDrawerOpen(!isDrawerOpen)}
+          className="p-3 flex items-center justify-between cursor-pointer border-b border-slate-100 bg-slate-50/80 rounded-t-3xl select-none"
+        >
+          <div className="flex items-center gap-2">
+            <span className="w-2 h-2 rounded-full bg-blue-600 animate-pulse" />
+            <span className="text-xs font-bold text-slate-800">
+              {editingRecordId ? `正在編輯：${targetRecordDate}` : '記錄此刻心情隨筆'}
+            </span>
+          </div>
+          <div className="flex items-center gap-1.5 text-xs text-slate-500 font-medium">
+            <span>{isDrawerOpen ? '收折面板' : '點擊展開'}</span>
+            {isDrawerOpen ? <ChevronDown className="w-4 h-4 text-slate-400" /> : <ChevronUp className="w-4 h-4 text-slate-400" />}
+          </div>
+        </div>
+
+        {/* 抽屜內部表單 */}
+        <div className="p-4 space-y-3.5">
+          
+          {/* 照片選取列與日期補登 */}
+          <div className="flex items-center gap-2">
+            <label className="flex-1 flex items-center justify-center gap-2 bg-slate-100 hover:bg-slate-200 text-slate-700 py-2 px-3 rounded-xl cursor-pointer text-xs font-medium border border-slate-200">
+              <Camera className="w-4 h-4 text-blue-600" />
+              <span>{stagedPhoto ? '更換照片' : '拍下此刻相片'}</span>
+              <input type="file" accept="image/*" capture="environment" className="hidden" onChange={handlePhotoUpload} />
+            </label>
+
+            <div className="flex items-center gap-1 bg-slate-100 px-2 py-1.5 rounded-xl border border-slate-200">
+              <CalendarIcon className="w-3.5 h-3.5 text-blue-500" />
+              <input 
+                type="date" 
+                value={targetRecordDate} 
+                onChange={(e) => setTargetRecordDate(e.target.value)} 
+                className="bg-transparent text-xs font-semibold text-slate-700 outline-none w-28" 
+              />
+            </div>
+          </div>
+
+          {/* 相片預覽與釘選 */}
+          {stagedPhoto && (
+            <div className="relative border border-slate-200 rounded-xl overflow-hidden bg-black/5">
+              <div className="relative cursor-crosshair" onClick={handleImageClick}>
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src={stagedPhoto.previewUrl} alt="預覽" className="w-full h-40 object-cover" />
+                {stagedPhoto.tags.map((tag) => (
+                  <div key={tag.id} style={{ top: `${tag.yPercent}%`, left: `${tag.xPercent}%` }} className="absolute -translate-x-1/2 -translate-y-1/2 bg-black/75 backdrop-blur text-white text-[10px] px-2 py-0.5 rounded-full pointer-events-none flex items-center gap-1">
+                    <MapPin className="w-2.5 h-2.5 text-amber-400" />
+                    {tag.caption}
+                  </div>
+                ))}
+              </div>
+              {pendingTagPos && (
+                <div className="p-2 bg-white border-t border-slate-200 flex gap-1.5">
+                  <input type="text" placeholder="留一句話..." value={tempTagCaption} onChange={(e) => setTempTagCaption(e.target.value)} className="text-xs flex-1 border rounded px-2 py-1 outline-none" autoFocus />
+                  <button onClick={addTagToPhoto} className="bg-blue-600 text-white text-xs px-2.5 py-1 rounded">標記</button>
+                </div>
+              )}
+              <button onClick={() => setStagedPhoto(null)} className="absolute top-2 right-2 bg-white/80 p-1 rounded-full text-rose-600 shadow">
+                <Trash2 className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          )}
+
+          {/* 分類切換膠囊 */}
+          <div>
+            <label className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider block mb-1.5">
+              記事分類
+            </label>
+            <div className="flex flex-wrap gap-1.5">
+              {CATEGORIES.map((cat) => {
+                const isSelected = selectedCategory === cat.id;
+                return (
+                  <button
+                    key={cat.id}
+                    type="button"
+                    onClick={() => setSelectedCategory(cat.id)}
+                    className={`px-2.5 py-1 rounded-lg text-xs font-medium transition border flex items-center gap-1 ${
+                      isSelected
+                        ? 'bg-blue-600 text-white border-blue-600 shadow font-semibold'
+                        : 'bg-slate-50 border-slate-200 text-slate-600'
+                    }`}
+                  >
+                    <span>{cat.icon}</span>
+                    <span>{cat.label}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* 心情選擇刻度 */}
+          <div>
+            <label className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider block mb-1.5">
+              當日心情
+            </label>
+            <div className="grid grid-cols-5 gap-1 bg-slate-50 p-1.5 rounded-xl border border-slate-200">
+              {MOODS.map((m) => {
+                const IconComponent = m.icon;
+                const isSelected = selectedMood === m.level;
+                return (
+                  <button
+                    key={m.level}
+                    type="button"
+                    onClick={() => setSelectedMood(m.level)}
+                    className={`flex flex-col items-center py-1.5 rounded-lg text-xs ${
+                      isSelected ? 'bg-white shadow font-bold scale-105' : 'text-slate-400'
+                    }`}
+                  >
+                    <IconComponent className={`w-4 h-4 mb-0.5 ${isSelected ? m.color.split(' ')[0] : ''}`} />
+                    <span className="text-[10px]">{m.label}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* 文字內容輸入 */}
+          <textarea
+            rows={2}
+            placeholder="記錄該日的心情隨筆..."
+            value={note}
+            onFocus={() => setIsDrawerOpen(true)}
+            onChange={(e) => setNote(e.target.value)}
+            className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none focus:ring-2 focus:ring-blue-500/20 resize-none bg-slate-50"
+          />
+
+          {/* 送出與取消按鈕 */}
+          <div className="flex gap-2 pb-1">
+            {editingRecordId && (
+              <button 
+                type="button" 
+                onClick={handleCancelEdit} 
+                className="flex-1 bg-slate-200 text-slate-700 py-2 rounded-xl text-xs font-semibold"
+              >
+                取消
+              </button>
+            )}
+            <button
+              onClick={handleSubmit}
+              className={`flex-1 text-white py-2 rounded-xl flex items-center justify-center gap-1.5 shadow text-xs font-semibold ${
+                editingRecordId ? 'bg-amber-600 hover:bg-amber-700' : 'bg-blue-600 hover:bg-blue-700'
+              }`}
+            >
+              {editingRecordId ? <><Check className="w-3.5 h-3.5" /> 儲存修改</> : <><Send className="w-3.5 h-3.5" /> 儲存至 {targetRecordDate}</>}
+            </button>
+          </div>
+        </div>
+      </section>
+
     </div>
   );
 }
