@@ -13,7 +13,7 @@ import {
 import { db, MoodRecord, PhotoData, PhotoTag } from '@/lib/db';
 import { supabase } from '@/lib/supabase';
 
-const APP_VERSION = 'Ver. 001.008.003';
+const APP_VERSION = 'Ver. 001.008.004';
 const DEFAULT_TITLE = 'MindLog';
 const SYNC_ROW_ID = 'user_mindlog_store';
 
@@ -174,7 +174,6 @@ export default function MindLogPage() {
             localStorage.setItem('mindlog_header_config', JSON.stringify(cloudSettings));
             appendLog(`封面狀態: ${cloudSettings.bgImageUrl ? `已成功拉取 (約 ${Math.round(cloudSettings.bgImageUrl.length / 1024)} KB)` : '雲端無封面'}`);
 
-            // 自 settings.customCategories 解析分類
             if (data.settings.customCategories && Array.isArray(data.settings.customCategories)) {
               setCategories(data.settings.customCategories);
               localStorage.setItem('mindlog_custom_categories', JSON.stringify(data.settings.customCategories));
@@ -209,7 +208,7 @@ export default function MindLogPage() {
     pullFromCloud();
   }, []);
 
-  // 2. 將設定與資料推送到 Supabase (將分類收納於 settings 避免 PGRST204)
+  // 2. 將設定與資料推送到 Supabase
   const pushToCloud = async (newSettings?: HeaderConfig, newCategories?: CategoryOption[]) => {
     try {
       setSyncStatus('syncing');
@@ -270,7 +269,7 @@ export default function MindLogPage() {
 
     try {
       appendLog(`選取封面: ${file.name} (${Math.round(file.size / 1024)} KB)，壓縮中...`);
-      const options = { maxSizeMB: 0.15, maxWidthOrHeight: 1000, useWebWorker: true };
+      const options = { maxSizeMB: 0.15, maxWidthOrHeight: 1280, useWebWorker: true };
       const compressedBlob = await imageCompression(file, options);
       appendLog(`封面壓縮完成: 縮減至 ${Math.round(compressedBlob.size / 1024)} KB`);
 
@@ -520,7 +519,7 @@ export default function MindLogPage() {
     }
   };
 
-  // 🌿 橫幅封面元件
+  // 🌿 橫幅封面元件：手機維持 h-36，NB 專屬擴大 min-h-[190px] 且頭像加大
   const renderHeaderBanner = (isMobile = false) => {
     const hasBg = !!headerConfig.bgImageUrl;
 
@@ -529,7 +528,7 @@ export default function MindLogPage() {
         className={`relative overflow-hidden transition-all duration-300 ${
           isMobile 
             ? 'w-full h-36 md:hidden' 
-            : 'w-full rounded-2xl mb-5 shadow-sm'
+            : 'w-full rounded-2xl mb-5 shadow-sm md:min-h-[190px]'
         } ${!hasBg ? 'bg-gradient-to-r from-slate-900 to-slate-800 text-white' : ''}`}
         style={hasBg ? {
           backgroundImage: `url(${headerConfig.bgImageUrl})`,
@@ -537,11 +536,12 @@ export default function MindLogPage() {
           backgroundPosition: 'center',
         } : {}}
       >
+        {/* 對比度保護暗色漸層遮罩：NB 減輕中間層，加強照片細節清晰度 */}
         {hasBg && (
-          <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/45 to-black/30 pointer-events-none" />
+          <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/35 to-black/20 md:from-black/80 md:via-black/25 md:to-black/10 pointer-events-none" />
         )}
 
-        <div className={`relative z-10 flex flex-col justify-between h-full p-4 ${isMobile ? 'h-36' : 'min-h-[130px]'}`}>
+        <div className={`relative z-10 flex flex-col justify-between h-full p-4 ${isMobile ? 'h-36' : 'min-h-[130px] md:min-h-[190px]'}`}>
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-1.5">
               <button
@@ -630,15 +630,16 @@ export default function MindLogPage() {
                     setTempTitle(headerConfig.title);
                     setIsEditingHeader(true);
                   }}
-                  className="flex items-center gap-2.5 cursor-pointer select-none"
+                  className="flex items-center gap-2.5 md:gap-3.5 cursor-pointer select-none"
                   title="點擊修改日記名稱"
                 >
+                  {/* 使用者自訂頭像：手機維持 w-10 h-10 圓形，NB 擴大為 w-14 h-14 圓角卡片 */}
                   <div 
                     onClick={(e) => {
                       e.stopPropagation();
                       avatarFileRef.current?.click();
                     }}
-                    className="relative group/avatar cursor-pointer"
+                    className="relative group/avatar cursor-pointer shrink-0"
                     title="點擊更換頭像"
                   >
                     {headerConfig.avatarUrl ? (
@@ -646,10 +647,10 @@ export default function MindLogPage() {
                       <img 
                         src={headerConfig.avatarUrl} 
                         alt="User Avatar" 
-                        className="w-10 h-10 rounded-full object-cover border-2 border-white/80 shadow-md transition-transform group-hover/avatar:scale-105" 
+                        className="w-10 h-10 md:w-14 md:h-14 rounded-full md:rounded-2xl object-cover border-2 border-white/90 shadow-md md:shadow-lg transition-transform group-hover/avatar:scale-105" 
                       />
                     ) : (
-                      <div className="w-10 h-10 rounded-full bg-white/20 backdrop-blur border border-white/40 flex items-center justify-center text-lg shadow-md transition-transform group-hover/avatar:scale-105">
+                      <div className="w-10 h-10 md:w-14 md:h-14 rounded-full md:rounded-2xl bg-white/20 backdrop-blur border border-white/40 flex items-center justify-center text-lg md:text-2xl shadow-md md:shadow-lg transition-transform group-hover/avatar:scale-105">
                         🌿
                       </div>
                     )}
@@ -874,8 +875,8 @@ export default function MindLogPage() {
   return (
     <div className="min-h-screen bg-slate-100 text-slate-800 font-sans flex flex-col md:flex-row">
       
-      {/* ──────────────── 💻 PC 端左側固定面板 ──────────────── */}
-      <aside className="hidden md:flex w-96 bg-white border-r border-slate-200 p-5 flex-col justify-between shrink-0 shadow-sm h-screen sticky top-0 overflow-y-auto">
+      {/* ──────────────── 💻 PC 端左側固定面板 (NB 微幅拓寬為 w-[410px]，手機不變) ──────────────── */}
+      <aside className="hidden md:flex w-96 md:w-[410px] bg-white border-r border-slate-200 p-5 flex-col justify-between shrink-0 shadow-sm h-screen sticky top-0 overflow-y-auto">
         <div>
           {renderHeaderBanner(false)}
           {renderEditorForm()}
@@ -887,12 +888,13 @@ export default function MindLogPage() {
         </div>
       </aside>
 
-      {/* ──────────────── 📱+💻 主時間軸區塊 ──────────────── */}
+      {/* ──────────────── 📱+💻 主時間軸區塊 (NB 卡片放寬至 max-w-4xl，手機維持 max-w-2xl 滿版) ──────────────── */}
       <div className="flex-1 flex flex-col min-h-screen">
         
         {renderHeaderBanner(true)}
 
-        <main className="flex-1 max-w-2xl mx-auto w-full p-4 md:p-8 pb-36 md:pb-8">
+        {/* 核心變更：手機保留 max-w-2xl，NB 端提升至 md:max-w-4xl */}
+        <main className="flex-1 max-w-2xl md:max-w-4xl mx-auto w-full p-4 md:p-8 pb-36 md:pb-8">
           
           <div className="bg-white rounded-2xl p-3.5 border border-slate-200/90 shadow-sm mb-5 space-y-3">
             
@@ -997,7 +999,7 @@ export default function MindLogPage() {
               return (
                 <article 
                   key={record.id} 
-                  className={`bg-white rounded-2xl p-4 border transition-all shadow-sm ${
+                  className={`bg-white rounded-2xl p-5 border transition-all shadow-sm ${
                     isEditing ? 'border-amber-400 ring-2 ring-amber-400/20' : 'border-slate-200/80'
                   }`}
                 >
@@ -1041,7 +1043,7 @@ export default function MindLogPage() {
                   )}
 
                   {record.note && (
-                    <p className="text-sm text-slate-700 leading-relaxed whitespace-pre-line">
+                    <p className="text-sm md:text-[15px] text-slate-700 leading-relaxed whitespace-pre-line">
                       {record.note}
                     </p>
                   )}
@@ -1099,7 +1101,7 @@ export default function MindLogPage() {
 
       </div>
 
-      {/* ──────────────── 🐞 診斷日誌彈窗 (Modal) ──────────────── */}
+      {/* ──────────────── 🐞 診斷日誌彈窗 ──────────────── */}
       {showLogModal && (
         <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-slate-900 border border-slate-700 text-slate-100 rounded-2xl w-full max-w-lg max-h-[80vh] flex flex-col shadow-2xl overflow-hidden font-mono">
