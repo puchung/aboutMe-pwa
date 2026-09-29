@@ -7,11 +7,11 @@ import {
   Smile, Frown, Meh, Laugh, Angry, 
   Camera, MapPin, Send, Trash2, Calendar as CalendarIcon, 
   Clock, Edit3, X, ChevronLeft, ChevronRight, RotateCcw, Check,
-  Tag, ChevronUp, ChevronDown, Plus, Image as ImageIcon, RotateCcw as ResetIcon, Settings
+  Tag, ChevronUp, ChevronDown, Plus, Image as ImageIcon, RotateCcw as ResetIcon, Upload
 } from 'lucide-react';
 import { db, MoodRecord, PhotoData, PhotoTag } from '@/lib/db';
 
-const APP_VERSION = 'Ver. 001.006.000';
+const APP_VERSION = 'Ver. 001.007.000';
 const DEFAULT_TITLE = 'MindLog';
 
 interface CategoryOption {
@@ -40,19 +40,23 @@ const MOODS: { level: 1 | 2 | 3 | 4 | 5; label: string; icon: any; color: string
 interface HeaderConfig {
   title: string;
   bgImageUrl: string | null;
+  avatarUrl: string | null; // 👤 自訂頭像圖片
 }
 
 export default function MindLogPage() {
   const todayStr = new Date().toISOString().split('T')[0];
 
-  // 🌿 Title 與背景封面設定
+  // 🌿 Title、封面與頭像設定
   const [headerConfig, setHeaderConfig] = useState<HeaderConfig>({
     title: DEFAULT_TITLE,
     bgImageUrl: null,
+    avatarUrl: null,
   });
   const [isEditingHeader, setIsEditingHeader] = useState(false);
   const [tempTitle, setTempTitle] = useState(DEFAULT_TITLE);
+  
   const headerFileRef = useRef<HTMLInputElement>(null);
+  const avatarFileRef = useRef<HTMLInputElement>(null);
 
   // 🏷️ 分類狀態管理
   const [categories, setCategories] = useState<CategoryOption[]>(DEFAULT_CATEGORIES);
@@ -103,13 +107,12 @@ export default function MindLogPage() {
     }
   }, []);
 
-  // 儲存 Title 與封面相片設定
   const saveHeaderConfig = (newConfig: HeaderConfig) => {
     setHeaderConfig(newConfig);
     localStorage.setItem('mindlog_header_config', JSON.stringify(newConfig));
   };
 
-  // 更換封面相片
+  // 上傳封面背景
   const handleCoverUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -128,17 +131,35 @@ export default function MindLogPage() {
     }
   };
 
-  // 還原預設 Title 與封面
+  // 👤 上傳自訂頭像照片
+  const handleAvatarUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    try {
+      const options = { maxSizeMB: 0.15, maxWidthOrHeight: 400, useWebWorker: true };
+      const compressedBlob = await imageCompression(file, options);
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        const base64data = reader.result as string;
+        saveHeaderConfig({ ...headerConfig, avatarUrl: base64data });
+      };
+      reader.readAsDataURL(compressedBlob);
+    } catch (err) {
+      console.error('頭像照片壓縮失敗:', err);
+    }
+  };
+
+  // 還原預設 Title、封面與頭像
   const handleResetHeader = () => {
-    if (window.confirm('確定要還原預設標題與純色背景嗎？')) {
-      const defConfig: HeaderConfig = { title: DEFAULT_TITLE, bgImageUrl: null };
+    if (window.confirm('確定要還原預設標題、頭像與底色嗎？')) {
+      const defConfig: HeaderConfig = { title: DEFAULT_TITLE, bgImageUrl: null, avatarUrl: null };
       setTempTitle(DEFAULT_TITLE);
       saveHeaderConfig(defConfig);
       setIsEditingHeader(false);
     }
   };
 
-  // 儲存文字標題修改
   const handleSaveTitle = () => {
     const newTitle = tempTitle.trim() || DEFAULT_TITLE;
     saveHeaderConfig({ ...headerConfig, title: newTitle });
@@ -184,7 +205,7 @@ export default function MindLogPage() {
     }
   };
 
-  // 即時讀取日記清單 (日期與分類雙重交集查詢)
+  // 即時讀取日記清單
   const entries = useLiveQuery(async () => {
     let list: (MoodRecord & { category?: string })[] = [];
     if (filterDate) {
@@ -199,7 +220,6 @@ export default function MindLogPage() {
     return list;
   }, [filterDate, filterCategory]);
 
-  // 照片壓縮
   const handlePhotoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -337,7 +357,7 @@ export default function MindLogPage() {
     }
   };
 
-  // 🌿 橫幅封面元件（含文字自訂、相片上傳與對比度遮罩）
+  // 🌿 橫幅封面元件 (含自訂標題、頭像上傳與背景相片)
   const renderHeaderBanner = (isMobile = false) => {
     const hasBg = !!headerConfig.bgImageUrl;
 
@@ -345,7 +365,7 @@ export default function MindLogPage() {
       <div 
         className={`relative overflow-hidden transition-all duration-300 ${
           isMobile 
-            ? 'w-full h-32 md:hidden' 
+            ? 'w-full h-36 md:hidden' 
             : 'w-full rounded-2xl mb-5 shadow-sm'
         } ${!hasBg ? 'bg-gradient-to-r from-slate-900 to-slate-800 text-white' : ''}`}
         style={hasBg ? {
@@ -360,14 +380,32 @@ export default function MindLogPage() {
         )}
 
         {/* 橫幅內容 */}
-        <div className={`relative z-10 flex flex-col justify-between h-full p-4 ${isMobile ? 'h-32' : 'min-h-[120px]'}`}>
-          {/* 上排功能鍵：自訂 Title & 更換相片 */}
+        <div className={`relative z-10 flex flex-col justify-between h-full p-4 ${isMobile ? 'h-36' : 'min-h-[130px]'}`}>
+          
+          {/* 上排功能鍵：更換頭像、更換封面、還原 */}
           <div className="flex items-center justify-between">
-            <span className="text-[10px] font-mono tracking-widest uppercase bg-black/40 backdrop-blur-sm text-slate-200 px-2 py-0.5 rounded-full border border-white/10">
-              {APP_VERSION}
-            </span>
+            <div className="flex items-center gap-1.5">
+              {/* 更換頭像按鈕 */}
+              <button
+                type="button"
+                onClick={() => avatarFileRef.current?.click()}
+                className="p-1.5 rounded-lg bg-black/40 hover:bg-black/60 text-white backdrop-blur-sm border border-white/15 transition-all text-xs flex items-center gap-1"
+                title="上傳專屬頭像"
+              >
+                <Upload className="w-3.5 h-3.5 text-blue-400" />
+                <span className="text-[10px]">換頭像</span>
+              </button>
+              <input 
+                ref={avatarFileRef} 
+                type="file" 
+                accept="image/*" 
+                className="hidden" 
+                onChange={handleAvatarUpload} 
+              />
+            </div>
 
             <div className="flex items-center gap-1.5">
+              {/* 更換封面按鈕 */}
               <button
                 type="button"
                 onClick={() => headerFileRef.current?.click()}
@@ -375,7 +413,7 @@ export default function MindLogPage() {
                 title="上傳自訂背景相片"
               >
                 <ImageIcon className="w-3.5 h-3.5 text-emerald-400" />
-                <span className="text-[10px] hidden sm:inline">換封面</span>
+                <span className="text-[10px]">換封面</span>
               </button>
               <input 
                 ref={headerFileRef} 
@@ -385,12 +423,12 @@ export default function MindLogPage() {
                 onChange={handleCoverUpload} 
               />
 
-              {hasBg && (
+              {(hasBg || headerConfig.avatarUrl) && (
                 <button
                   type="button"
                   onClick={handleResetHeader}
                   className="p-1.5 rounded-lg bg-black/40 hover:bg-rose-900/60 text-white backdrop-blur-sm border border-white/15 transition-all"
-                  title="還原預設底色"
+                  title="還原預設外觀"
                 >
                   <ResetIcon className="w-3.5 h-3.5 text-slate-300 hover:text-rose-400" />
                 </button>
@@ -398,7 +436,7 @@ export default function MindLogPage() {
             </div>
           </div>
 
-          {/* 下排：標題文字（支援就地編輯） */}
+          {/* 下排：使用者頭像與標題文字 */}
           <div className="mt-auto">
             {!isEditingHeader ? (
               <div className="flex items-center justify-between group">
@@ -407,14 +445,43 @@ export default function MindLogPage() {
                     setTempTitle(headerConfig.title);
                     setIsEditingHeader(true);
                   }}
-                  className="flex items-center gap-2 cursor-pointer"
+                  className="flex items-center gap-2.5 cursor-pointer select-none"
                   title="點擊修改日記名稱"
                 >
-                  <h1 className="text-xl md:text-2xl font-black tracking-tight text-white drop-shadow-md">
-                    🌿 {headerConfig.title}
-                  </h1>
-                  <Edit3 className="w-3.5 h-3.5 text-white/60 opacity-0 group-hover:opacity-100 transition-opacity" />
+                  {/* 使用者自訂頭像 (點擊可更換) */}
+                  <div 
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      avatarFileRef.current?.click();
+                    }}
+                    className="relative group/avatar cursor-pointer"
+                    title="點擊更換頭像"
+                  >
+                    {headerConfig.avatarUrl ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img 
+                        src={headerConfig.avatarUrl} 
+                        alt="User Avatar" 
+                        className="w-10 h-10 rounded-full object-cover border-2 border-white/80 shadow-md transition-transform group-hover/avatar:scale-105" 
+                      />
+                    ) : (
+                      <div className="w-10 h-10 rounded-full bg-white/20 backdrop-blur border border-white/40 flex items-center justify-center text-lg shadow-md transition-transform group-hover/avatar:scale-105">
+                        🌿
+                      </div>
+                    )}
+                    <span className="absolute -bottom-1 -right-1 bg-blue-600 rounded-full p-0.5 text-white opacity-0 group-hover/avatar:opacity-100 transition-opacity">
+                      <Upload className="w-2.5 h-2.5" />
+                    </span>
+                  </div>
+
+                  <div className="flex items-center gap-1.5">
+                    <h1 className="text-xl md:text-2xl font-black tracking-tight text-white drop-shadow-md">
+                      {headerConfig.title}
+                    </h1>
+                    <Edit3 className="w-3.5 h-3.5 text-white/60 opacity-0 group-hover:opacity-100 transition-opacity" />
+                  </div>
                 </div>
+
                 <span className="text-xs text-white/80 font-medium drop-shadow">
                   共 {entries?.length || 0} 篇
                 </span>
@@ -447,12 +514,13 @@ export default function MindLogPage() {
               </div>
             )}
           </div>
+
         </div>
       </div>
     );
   };
 
-  // 表單核心組件（手機抽屜與 PC 側邊欄共用）
+  // 表單核心組件
   const renderEditorForm = () => (
     <div className="space-y-4">
       {editingRecordId && (
@@ -637,9 +705,10 @@ export default function MindLogPage() {
           {renderEditorForm()}
         </div>
 
+        {/* 💻 PC 側邊欄底部 */}
         <div className="pt-4 border-t border-slate-100 flex items-center justify-between text-xs text-slate-400">
-          <span>PC / 手機自適應橫幅</span>
-          <span>{APP_VERSION}</span>
+          <span>PC / 手機自適應架構</span>
+          <span>共 {entries?.length || 0} 篇</span>
         </div>
       </aside>
 
@@ -813,7 +882,7 @@ export default function MindLogPage() {
 
                   <div className="mt-3 pt-2 border-t border-slate-100 flex items-center justify-between text-[11px] text-slate-400">
                     <span>紀錄日期：{record.dateStr}{record.updatedAt && ' (已編輯)'}</span>
-                    <span className="font-mono text-[10px] text-slate-300">{record.appVersion}</span>
+                    <span>歸檔完整</span>
                   </div>
                 </article>
               );
@@ -828,6 +897,14 @@ export default function MindLogPage() {
               </div>
             )}
           </div>
+
+          {/* 📍 1. 搬移至 PWA 網頁最下方的版本訊息列 */}
+          <footer className="mt-12 mb-4 text-center">
+            <span className="inline-block text-[11px] font-mono text-slate-400 bg-slate-200/60 border border-slate-200 px-3 py-1 rounded-full shadow-sm">
+              MindLog PWA · {APP_VERSION}
+            </span>
+          </footer>
+
         </main>
 
         {/* ──────────────── 📱 手機端專屬：吸底拇指常駐抽屜 ──────────────── */}
