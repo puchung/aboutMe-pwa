@@ -8,14 +8,16 @@ import {
   Camera, MapPin, Send, Trash2, Calendar as CalendarIcon, 
   Clock, Edit3, X, ChevronLeft, ChevronRight, RotateCcw, Check,
   Tag, ChevronUp, ChevronDown, Plus, Image as ImageIcon, RotateCcw as ResetIcon, Upload,
-  Cloud, CloudOff, RefreshCw, Bug, Copy, Trash, Settings
+  Cloud, CloudOff, RefreshCw, Bug, Copy, Trash, Settings, Lock, KeyRound, LogOut
 } from 'lucide-react';
 import { db, MoodRecord, PhotoData, PhotoTag } from '@/lib/db';
 import { supabase } from '@/lib/supabase';
 
-const APP_VERSION = 'Ver. 001.008.005';
+const APP_VERSION = 'Ver. 001.009.000';
 const DEFAULT_TITLE = 'MindLog';
 const SYNC_ROW_ID = 'user_mindlog_store';
+const DEFAULT_ACCESS_PASS = '8888'; // 預設網站通行碼
+const AUTH_TOKEN_KEY = 'mindlog_auth_token_v1';
 
 interface CategoryOption {
   id: string;
@@ -44,6 +46,7 @@ interface HeaderConfig {
   title: string;
   bgImageUrl: string | null;
   avatarUrl: string | null;
+  accessPassCode?: string;
 }
 
 const blobToBase64 = (blob: Blob): Promise<string> => {
@@ -70,11 +73,17 @@ const base64ToBlob = (base64: string): Blob => {
 export default function MindLogPage() {
   const todayStr = new Date().toISOString().split('T')[0];
 
+  // 🔒 網站通行授權狀態 (首次輸入即記住，重整不重複輸入)
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
+  const [authChecking, setAuthChecking] = useState<boolean>(true);
+  const [inputPassCode, setInputPassCode] = useState<string>('');
+  const [passError, setPassError] = useState<string>('');
+
   // 🐞 診斷日誌系統
   const [debugLogs, setDebugLogs] = useState<string[]>([]);
   const [showLogModal, setShowLogModal] = useState(false);
 
-  // ⚙️ 系統與外觀設定彈窗
+  // ⚙️ 系統設定彈窗
   const [showSettingsModal, setShowSettingsModal] = useState(false);
 
   const appendLog = (msg: string) => {
@@ -92,6 +101,7 @@ export default function MindLogPage() {
     title: DEFAULT_TITLE,
     bgImageUrl: null,
     avatarUrl: null,
+    accessPassCode: DEFAULT_ACCESS_PASS,
   });
   const [isEditingHeader, setIsEditingHeader] = useState(false);
   const [tempTitle, setTempTitle] = useState(DEFAULT_TITLE);
@@ -122,9 +132,22 @@ export default function MindLogPage() {
   const [filterDate, setFilterDate] = useState<string>('');
   const [filterCategory, setFilterCategory] = useState<string>('all');
 
-  // 1. 初次載入與 Supabase 雲端資料同步
+  // 1. 初次載入：檢查本機通行憑證 (若已驗證過則直接放行秒開)
   useEffect(() => {
     appendLog(`系統初始化啟動: ${APP_VERSION}`);
+    const token = localStorage.getItem(AUTH_TOKEN_KEY);
+    if (token === 'granted') {
+      setIsAuthenticated(true);
+      appendLog('✅ 本機已持有持久通行憑證，直接進入系統');
+    } else {
+      appendLog('🔒 本機尚未通過驗證，進入門禁防護模式');
+    }
+    setAuthChecking(false);
+  }, []);
+
+  // 2. 驗證通過後才載入本地快取並向 Supabase 拉取資料 (防止未授權提取)
+  useEffect(() => {
+    if (!isAuthenticated) return;
 
     const savedHeader = localStorage.getItem('mindlog_header_config');
     if (savedHeader) {
@@ -132,10 +155,7 @@ export default function MindLogPage() {
         const parsed = JSON.parse(savedHeader);
         setHeaderConfig(parsed);
         setTempTitle(parsed.title || DEFAULT_TITLE);
-        appendLog(`本地 Header 快取載入: [${parsed.title}], 封面=${parsed.bgImageUrl ? `有(${Math.round(parsed.bgImageUrl.length / 1024)}KB)` : '無'}`);
-      } catch (e) {
-        appendLog(`讀取本地 Header 失敗: ${e}`);
-      }
+      } catch (e) {}
     }
 
     const savedCats = localStorage.getItem('mindlog_custom_categories');
@@ -171,11 +191,11 @@ export default function MindLogPage() {
               title: data.settings.title || DEFAULT_TITLE,
               avatarUrl: data.settings.avatarUrl || null,
               bgImageUrl: data.settings.bgImageUrl || null,
+              accessPassCode: data.settings.accessPassCode || DEFAULT_ACCESS_PASS,
             };
             setHeaderConfig(cloudSettings);
             setTempTitle(cloudSettings.title);
             localStorage.setItem('mindlog_header_config', JSON.stringify(cloudSettings));
-            appendLog(`封面狀態: ${cloudSettings.bgImageUrl ? `已成功拉取 (約 ${Math.round(cloudSettings.bgImageUrl.length / 1024)} KB)` : '雲端無封面'}`);
 
             if (data.settings.customCategories && Array.isArray(data.settings.customCategories)) {
               setCategories(data.settings.customCategories);
@@ -198,8 +218,6 @@ export default function MindLogPage() {
             }
             appendLog(`成功同步隨筆: 共 ${cloudRecords.length} 篇`);
           }
-        } else {
-          appendLog('雲端無備份資料');
         }
         setSyncStatus('synced');
       } catch (err: any) {
@@ -209,15 +227,66 @@ export default function MindLogPage() {
     };
 
     pullFromCloud();
-  }, []);
+  }, [isAuthenticated]);
 
-  // 2. 將設定與資料推送到 Supabase
+  // 3. 執行通行碼比對 (正確時寫入本機憑證，往後免再輸入)
+  const handleVerifyPassCode = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setPassError('');
+
+    let correctCode = headerConfig.accessPassCode || DEFAULT_ACCESS_PASS;
+
+    // 若本地未緩存最新密碼，先向 Supabase 確認雲端最新通行碼
+    try {
+      const { data } = await supabase.from('mindlog_sync').select('settings').eq('id', SYNC_ROW_ID).single();
+      if (data?.settings?.accessPassCode) {
+        correctCode = data.settings.accessPassCode;
+      }
+    } catch (e) {}
+
+    if (inputPassCode.trim() === correctCode) {
+      localStorage.setItem(AUTH_TOKEN_KEY, 'granted');
+      setIsAuthenticated(true);
+      setInputPassCode('');
+      appendLog('✅ 通行碼驗證成功，本機長期授權已建立');
+    } else {
+      setPassError('通行密碼錯誤，請重新確認');
+    }
+  };
+
+  // 4. 登出通行授權（手動撤銷本機憑證）
+  const handleRevokeAuth = () => {
+    if (window.confirm('確定要登出此裝置的通行授權嗎？\n登出後下次進入需重新輸入通行碼。')) {
+      localStorage.removeItem(AUTH_TOKEN_KEY);
+      setIsAuthenticated(false);
+      setShowSettingsModal(false);
+    }
+  };
+
+  // 5. 修改網站通行密碼
+  const handleChangePassCode = async () => {
+    const newCode = window.prompt(`請輸入新的網站通行碼 (目前通行碼: ${headerConfig.accessPassCode || DEFAULT_ACCESS_PASS})：`);
+    if (!newCode || !newCode.trim()) return;
+
+    const trimmed = newCode.trim();
+    if (trimmed.length < 4) {
+      alert('通行密碼長度建議至少 4 碼！');
+      return;
+    }
+
+    const updated = { ...headerConfig, accessPassCode: trimmed };
+    setHeaderConfig(updated);
+    localStorage.setItem('mindlog_header_config', JSON.stringify(updated));
+    await pushToCloud(updated);
+    alert(`通行碼已更新為【${trimmed}】並同步至雲端！`);
+  };
+
+  // 6. 將設定與資料推送到 Supabase
   const pushToCloud = async (newSettings?: HeaderConfig, newCategories?: CategoryOption[]) => {
     try {
       setSyncStatus('syncing');
       const curSettings = newSettings || headerConfig;
       const curCategories = newCategories || categories;
-      appendLog(`推送至 Supabase: 封面=${curSettings.bgImageUrl ? `包含 (${Math.round(curSettings.bgImageUrl.length / 1024)} KB)` : '無'}`);
 
       const allLocalRecords = await db.records.toArray();
       const serializableEntries = await Promise.all(
@@ -246,12 +315,7 @@ export default function MindLogPage() {
         updated_at: new Date().toISOString()
       });
 
-      if (error) {
-        appendLog(`❌ Supabase 寫入失敗: ${error.message} (代碼: ${error.code})`);
-        throw error;
-      }
-
-      appendLog('✅ Supabase 同步成功！封面與分類已更新');
+      if (error) throw error;
       setSyncStatus('synced');
     } catch (err: any) {
       appendLog(`❌ 同步拋出例外: ${err?.message || err}`);
@@ -265,16 +329,13 @@ export default function MindLogPage() {
     await pushToCloud(newConfig);
   };
 
-  // 🖼️ 封面圖片選取與壓縮
   const handleCoverUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
     try {
-      appendLog(`選取封面: ${file.name} (${Math.round(file.size / 1024)} KB)，壓縮中...`);
       const options = { maxSizeMB: 0.15, maxWidthOrHeight: 1280, useWebWorker: true };
       const compressedBlob = await imageCompression(file, options);
-      appendLog(`封面壓縮完成: 縮減至 ${Math.round(compressedBlob.size / 1024)} KB`);
 
       const reader = new FileReader();
       reader.onloadend = async () => {
@@ -288,13 +349,11 @@ export default function MindLogPage() {
     }
   };
 
-  // 👤 頭像上傳
   const handleAvatarUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
     try {
-      appendLog(`選取頭像照片: ${file.name}`);
       const options = { maxSizeMB: 0.08, maxWidthOrHeight: 256, useWebWorker: true };
       const compressedBlob = await imageCompression(file, options);
       const reader = new FileReader();
@@ -311,10 +370,14 @@ export default function MindLogPage() {
 
   const handleResetHeader = async () => {
     if (window.confirm('確定要還原預設外觀嗎？此設定將同步至所有裝置。')) {
-      const defConfig: HeaderConfig = { title: DEFAULT_TITLE, bgImageUrl: null, avatarUrl: null };
+      const defConfig: HeaderConfig = { 
+        title: DEFAULT_TITLE, 
+        bgImageUrl: null, 
+        avatarUrl: null, 
+        accessPassCode: headerConfig.accessPassCode || DEFAULT_ACCESS_PASS 
+      };
       setTempTitle(DEFAULT_TITLE);
       setIsEditingHeader(false);
-      appendLog('已執行外觀還原');
       await saveHeaderConfig(defConfig);
     }
   };
@@ -366,6 +429,7 @@ export default function MindLogPage() {
   };
 
   const entries = useLiveQuery(async () => {
+    if (!isAuthenticated) return [];
     let list: (MoodRecord & { category?: string })[] = [];
     if (filterDate) {
       list = await db.records.where('dateStr').equals(filterDate).reverse().sortBy('timestamp');
@@ -377,7 +441,7 @@ export default function MindLogPage() {
       list = list.filter((item) => ((item as any).category || 'daily') === filterCategory);
     }
     return list;
-  }, [filterDate, filterCategory]);
+  }, [filterDate, filterCategory, isAuthenticated]);
 
   const handlePhotoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -501,7 +565,7 @@ export default function MindLogPage() {
   };
 
   const handleDelete = async (record: MoodRecord) => {
-    if (window.confirm(`確定要刪除 ${record.dateStr} 的這篇隨筆嗎？此動作將同步抹除雲端備份。`)) {
+    if (window.confirm(`確定要刪除 ${record.dateStr} 的這篇隨筆嗎？`)) {
       if (record.id) {
         await db.records.delete(record.id);
         if (editingRecordId === record.id) {
@@ -522,7 +586,7 @@ export default function MindLogPage() {
     }
   };
 
-  // 🌿 橫幅封面元件：右上角功能全面收納至純 ⚙️ 齒輪 ICON
+  // 🌿 橫幅封面元件
   const renderHeaderBanner = (isMobile = false) => {
     const hasBg = !!headerConfig.bgImageUrl;
 
@@ -539,19 +603,15 @@ export default function MindLogPage() {
           backgroundPosition: 'center',
         } : {}}
       >
-        {/* 對比度保護暗色漸層遮罩 */}
         {hasBg && (
           <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/35 to-black/20 md:from-black/80 md:via-black/25 md:to-black/10 pointer-events-none" />
         )}
 
         <div className={`relative z-10 flex flex-col justify-between h-full p-4 ${isMobile ? 'h-36' : 'min-h-[130px] md:min-h-[190px]'}`}>
-          
-          {/* 上排功能鍵：左側留白，右側僅放雲端狀態燈與純 ⚙️ 齒輪按鈕 */}
           <div className="flex items-center justify-between">
             <div />
 
             <div className="flex items-center gap-1.5">
-              {/* 雲端同步狀態燈 */}
               <div className="bg-black/40 backdrop-blur-sm border border-white/15 p-1.5 rounded-xl">
                 {syncStatus === 'syncing' && (
                   <div title="雲端同步中...">
@@ -570,7 +630,7 @@ export default function MindLogPage() {
                 )}
               </div>
 
-              {/* ⚙️ 齒輪設定按鈕 (純 ICON，無文字) */}
+              {/* ⚙️ 齒輪設定按鈕 */}
               <button
                 type="button"
                 onClick={() => setShowSettingsModal(true)}
@@ -582,7 +642,6 @@ export default function MindLogPage() {
             </div>
           </div>
 
-          {/* 下排：使用者頭像與標題文字 */}
           <div className="mt-auto">
             {!isEditingHeader ? (
               <div className="flex items-center justify-between group">
@@ -594,7 +653,6 @@ export default function MindLogPage() {
                   className="flex items-center gap-2.5 md:gap-3.5 cursor-pointer select-none"
                   title="點擊修改日記名稱"
                 >
-                  {/* 使用者自訂頭像 (點擊頭像本身亦可快速換頭像) */}
                   <div 
                     onClick={(e) => {
                       e.stopPropagation();
@@ -640,24 +698,15 @@ export default function MindLogPage() {
                   className="bg-transparent text-sm font-bold text-white outline-none w-full px-1"
                   autoFocus
                 />
-                <button
-                  type="button"
-                  onClick={handleSaveTitle}
-                  className="p-1 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg"
-                >
+                <button type="button" onClick={handleSaveTitle} className="p-1 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg">
                   <Check className="w-4 h-4" />
                 </button>
-                <button
-                  type="button"
-                  onClick={() => setIsEditingHeader(false)}
-                  className="p-1 bg-slate-700 hover:bg-slate-600 text-white rounded-lg"
-                >
+                <button type="button" onClick={() => setIsEditingHeader(false)} className="p-1 bg-slate-700 hover:bg-slate-600 text-white rounded-lg">
                   <X className="w-4 h-4" />
                 </button>
               </div>
             )}
           </div>
-
         </div>
       </div>
     );
@@ -682,11 +731,7 @@ export default function MindLogPage() {
             記錄日期 (可補登)
           </label>
           {targetRecordDate !== todayStr && (
-            <button
-              type="button"
-              onClick={() => setTargetRecordDate(todayStr)}
-              className="text-[11px] text-blue-600 hover:underline"
-            >
+            <button type="button" onClick={() => setTargetRecordDate(todayStr)} className="text-[11px] text-blue-600 hover:underline">
               切換為今天
             </button>
           )}
@@ -830,10 +875,62 @@ export default function MindLogPage() {
     </div>
   );
 
+  // ──────────────── 🔒 陌生訪客門禁鎖定畫面 (未持有授權憑證時全面封鎖) ────────────────
+  if (!isAuthenticated && !authChecking) {
+    return (
+      <div className="min-h-screen bg-slate-950 text-slate-100 flex items-center justify-center p-4 font-sans select-none">
+        <div className="w-full max-w-sm bg-slate-900/90 border border-slate-800 rounded-3xl p-6 md:p-8 shadow-2xl backdrop-blur-xl text-center">
+          <div className="w-16 h-16 rounded-2xl bg-blue-600/10 border border-blue-500/30 flex items-center justify-center mx-auto mb-4 text-blue-400">
+            <Lock className="w-8 h-8" />
+          </div>
+          <h1 className="text-xl font-bold text-white mb-1">私人隨筆保護</h1>
+          <p className="text-xs text-slate-400 mb-6">
+            此為私人隨筆站台，請輸入通行碼解鎖進入。<br />
+            （通過後本機將自動長期記住，無須重複輸入）
+          </p>
+
+          <form onSubmit={handleVerifyPassCode} className="space-y-4">
+            <div className="relative">
+              <input
+                type="password"
+                inputMode="text"
+                autoFocus
+                placeholder="輸入通行碼 (預設: 8888)"
+                value={inputPassCode}
+                onChange={(e) => setInputPassCode(e.target.value)}
+                className="w-full bg-slate-950 border border-slate-700 rounded-xl px-4 py-3 text-center text-sm font-semibold text-white tracking-widest outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
+              />
+            </div>
+
+            {passError && (
+              <p className="text-xs text-rose-400 font-medium animate-pulse">{passError}</p>
+            )}
+
+            <button
+              type="submit"
+              className="w-full bg-blue-600 hover:bg-blue-500 text-white font-semibold py-3 rounded-xl text-sm transition-all shadow-lg shadow-blue-600/20 active:scale-[0.98]"
+            >
+              驗證並記住此裝置
+            </button>
+          </form>
+
+          <div className="mt-8 text-[11px] text-slate-600 font-mono">
+            MindLog Security Gate · {APP_VERSION}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // 驗證檢查中呈現極簡占位
+  if (authChecking) {
+    return <div className="min-h-screen bg-slate-900" />;
+  }
+
+  // ──────────────── 主畫面 (已通過授權) ────────────────
   return (
     <div className="min-h-screen bg-slate-100 text-slate-800 font-sans flex flex-col md:flex-row">
       
-      {/* 隱藏的原生 File Inputs，供彈窗觸發 */}
       <input ref={headerFileRef} type="file" accept="image/*" className="hidden" onChange={handleCoverUpload} />
       <input ref={avatarFileRef} type="file" accept="image/*" className="hidden" onChange={handleAvatarUpload} />
 
@@ -1097,6 +1194,27 @@ export default function MindLogPage() {
               >
                 <Upload className="w-4 h-4 text-blue-400" />
                 <span>更換個人專屬頭像</span>
+              </button>
+
+              {/* 🔑 修改網站通行碼 */}
+              <button
+                onClick={() => {
+                  setShowSettingsModal(false);
+                  handleChangePassCode();
+                }}
+                className="w-full flex items-center gap-2.5 p-2.5 rounded-xl bg-slate-800 hover:bg-slate-700/80 text-amber-300 border border-slate-700/50 transition-colors"
+              >
+                <KeyRound className="w-4 h-4 text-amber-400" />
+                <span>變更網站通行碼 (目前: {headerConfig.accessPassCode || DEFAULT_ACCESS_PASS})</span>
+              </button>
+
+              {/* 🔒 登出本機授權 */}
+              <button
+                onClick={handleRevokeAuth}
+                className="w-full flex items-center gap-2.5 p-2.5 rounded-xl bg-slate-800 hover:bg-slate-700/80 text-slate-300 border border-slate-700/50 transition-colors"
+              >
+                <LogOut className="w-4 h-4 text-slate-400" />
+                <span>登出此裝置通行授權</span>
               </button>
 
               <button
