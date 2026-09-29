@@ -539,13 +539,24 @@ export default function MindLogPage() {
               />
             </div>
 
-            <div className="flex items-center gap-1.5">
-              {/* 雲端同步狀態指示燈 */}
-              <div className="bg-black/40 backdrop-blur-sm border border-white/15 p-1.5 rounded-lg mr-0.5">
-                {syncStatus === 'syncing' && <RefreshCw className="w-3.5 h-3.5 text-amber-400 animate-spin" title="雲端同步中..." />}
-                {syncStatus === 'synced' && <Cloud className="w-3.5 h-3.5 text-emerald-400" title="☁️ 雲端已即時同步" />}
-                {syncStatus === 'error' && <CloudOff className="w-3.5 h-3.5 text-rose-400" title="❌ 雲端同步異常" />}
-              </div>
+            {/* 雲端同步狀態指示燈 */}
+            <div className="bg-black/40 backdrop-blur-sm border border-white/15 p-1.5 rounded-lg mr-0.5">
+                {syncStatus === 'syncing' && (
+                    <div title="雲端同步中...">
+                    <RefreshCw className="w-3.5 h-3.5 text-amber-400 animate-spin" />
+                    </div>
+                )}
+                {syncStatus === 'synced' && (
+                    <div title="☁️ 雲端已即時同步">
+                    <Cloud className="w-3.5 h-3.5 text-emerald-400" />
+                    </div>
+                )}
+                {syncStatus === 'error' && (
+                    <div title="❌ 雲端同步異常">
+                    <CloudOff className="w-3.5 h-3.5 text-rose-400" />
+                    </div>
+            )}
+            </div>
 
               {/* 更換封面按鈕 */}
               <button
