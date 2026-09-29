@@ -59,7 +59,7 @@ export default function MindLogPage() {
 
   // 即時讀取本機日記串流 (支援日期與分類雙重交集查詢)
   const entries = useLiveQuery(async () => {
-    let list: MoodRecord[] = [];
+    let list: (MoodRecord & { category?: string })[] = [];
     if (filterDate) {
       list = await db.records.where('dateStr').equals(filterDate).reverse().sortBy('timestamp');
     } else {
@@ -67,7 +67,7 @@ export default function MindLogPage() {
     }
 
     if (filterCategory !== 'all') {
-      list = list.filter((item) => (item.category || 'daily') === filterCategory);
+      list = list.filter((item) => ((item as any).category || 'daily') === filterCategory);
     }
     return list;
   }, [filterDate, filterCategory]);

@@ -25,6 +25,7 @@ export interface MoodRecord {
   createdAt: string;            // 格式化顯示時間
   updatedAt?: number;           // 編輯更新時間戳記
   appVersion: string;
+  category?: string;
 }
 
 export class MindLogDatabase extends Dexie {
