@@ -13,10 +13,10 @@ import {
 import { db, MoodRecord, PhotoData, PhotoTag } from '@/lib/db';
 import { supabase } from '@/lib/supabase';
 
-const APP_VERSION = 'Ver. 001.009.000';
+const APP_VERSION = 'Ver. 001.009.001';
 const DEFAULT_TITLE = 'MindLog';
 const SYNC_ROW_ID = 'user_mindlog_store';
-const DEFAULT_ACCESS_PASS = '8888'; // 預設網站通行碼
+const DEFAULT_ACCESS_PASS = '8888';
 const AUTH_TOKEN_KEY = 'mindlog_auth_token_v1';
 
 interface CategoryOption {
@@ -73,7 +73,7 @@ const base64ToBlob = (base64: string): Blob => {
 export default function MindLogPage() {
   const todayStr = new Date().toISOString().split('T')[0];
 
-  // 🔒 網站通行授權狀態 (首次輸入即記住，重整不重複輸入)
+  // 🔒 網站通行授權狀態
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
   const [authChecking, setAuthChecking] = useState<boolean>(true);
   const [inputPassCode, setInputPassCode] = useState<string>('');
@@ -132,7 +132,7 @@ export default function MindLogPage() {
   const [filterDate, setFilterDate] = useState<string>('');
   const [filterCategory, setFilterCategory] = useState<string>('all');
 
-  // 1. 初次載入：檢查本機通行憑證 (若已驗證過則直接放行秒開)
+  // 1. 初次載入：檢查本機通行憑證
   useEffect(() => {
     appendLog(`系統初始化啟動: ${APP_VERSION}`);
     const token = localStorage.getItem(AUTH_TOKEN_KEY);
@@ -145,7 +145,7 @@ export default function MindLogPage() {
     setAuthChecking(false);
   }, []);
 
-  // 2. 驗證通過後才載入本地快取並向 Supabase 拉取資料 (防止未授權提取)
+  // 2. 驗證通過後才載入本地快取並向 Supabase 拉取資料
   useEffect(() => {
     if (!isAuthenticated) return;
 
@@ -229,14 +229,13 @@ export default function MindLogPage() {
     pullFromCloud();
   }, [isAuthenticated]);
 
-  // 3. 執行通行碼比對 (正確時寫入本機憑證，往後免再輸入)
+  // 3. 執行通行碼比對
   const handleVerifyPassCode = async (e: React.FormEvent) => {
     e.preventDefault();
     setPassError('');
 
     let correctCode = headerConfig.accessPassCode || DEFAULT_ACCESS_PASS;
 
-    // 若本地未緩存最新密碼，先向 Supabase 確認雲端最新通行碼
     try {
       const { data } = await supabase.from('mindlog_sync').select('settings').eq('id', SYNC_ROW_ID).single();
       if (data?.settings?.accessPassCode) {
@@ -254,7 +253,7 @@ export default function MindLogPage() {
     }
   };
 
-  // 4. 登出通行授權（手動撤銷本機憑證）
+  // 4. 登出通行授權
   const handleRevokeAuth = () => {
     if (window.confirm('確定要登出此裝置的通行授權嗎？\n登出後下次進入需重新輸入通行碼。')) {
       localStorage.removeItem(AUTH_TOKEN_KEY);
@@ -814,13 +813,14 @@ export default function MindLogPage() {
         </div>
       </div>
 
+      {/* 相片紀錄：移除 capture="environment"，支援自由選取相簿或拍照 */}
       <div>
         <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider block mb-1.5">相片紀錄</label>
         {!stagedPhoto ? (
           <label className="flex flex-col items-center justify-center border-2 border-dashed border-slate-300 rounded-xl p-3.5 cursor-pointer hover:border-blue-400 bg-slate-50 transition-colors">
             <Camera className="w-5 h-5 text-slate-400 mb-1" />
-            <span className="text-xs text-slate-500">拍下相片或上傳</span>
-            <input type="file" accept="image/*" capture="environment" className="hidden" onChange={handlePhotoUpload} />
+            <span className="text-xs text-slate-500">選取相簿相片或拍照</span>
+            <input type="file" accept="image/*" className="hidden" onChange={handlePhotoUpload} />
           </label>
         ) : (
           <div className="relative border border-slate-200 rounded-xl overflow-hidden bg-black/5">
@@ -875,7 +875,7 @@ export default function MindLogPage() {
     </div>
   );
 
-  // ──────────────── 🔒 陌生訪客門禁鎖定畫面 (未持有授權憑證時全面封鎖) ────────────────
+  // ──────────────── 🔒 門禁鎖定畫面 ────────────────
   if (!isAuthenticated && !authChecking) {
     return (
       <div className="min-h-screen bg-slate-950 text-slate-100 flex items-center justify-center p-4 font-sans select-none">
@@ -922,12 +922,11 @@ export default function MindLogPage() {
     );
   }
 
-  // 驗證檢查中呈現極簡占位
   if (authChecking) {
     return <div className="min-h-screen bg-slate-900" />;
   }
 
-  // ──────────────── 主畫面 (已通過授權) ────────────────
+  // ──────────────── 主畫面 ────────────────
   return (
     <div className="min-h-screen bg-slate-100 text-slate-800 font-sans flex flex-col md:flex-row">
       
@@ -1092,7 +1091,7 @@ export default function MindLogPage() {
                       {/* eslint-disable-next-line @next/next/no-img-element */}
                       <img src={URL.createObjectURL(record.photos[0].blob)} alt="記錄照片" className="w-full max-h-96 object-cover" />
                       {record.photos[0].tags?.map((tag) => (
-                        <div key={tag.id} style={{ top: `${tag.yPercent}%`, left: `${tag.xPercent}%` }} className="absolute -translate-x-1/2 -translate-y-1/2 bg-black/70 backdrop-blur-md text-white text-xs px-2.5 py-1 rounded-full shadow-lg border border-white/20 flex items-center gap-1.5">
+                        <div key={tag.id} style={{ top: `${tag.yPercent}%`, left: `${tag.xPercent}%` }} className="absolute -translate-x-1/2 -translate-y-1/2 bg-black/75 backdrop-blur-md text-white text-xs px-2.5 py-1 rounded-full shadow-lg border border-white/20 flex items-center gap-1.5">
                           <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
                           {tag.caption}
                         </div>
@@ -1132,6 +1131,7 @@ export default function MindLogPage() {
 
         </main>
 
+        {/* 手機吸底編輯抽屜 */}
         <section className={`md:hidden fixed bottom-0 left-0 right-0 z-40 bg-white border-t border-slate-200/90 shadow-[0_-8px_30px_rgba(0,0,0,0.12)] transition-all duration-300 rounded-t-3xl max-w-2xl mx-auto ${
           isDrawerOpen ? 'max-h-[85vh] overflow-y-auto' : 'max-h-20'
         } ${editingRecordId ? 'ring-2 ring-amber-400' : ''}`}>
@@ -1159,7 +1159,7 @@ export default function MindLogPage() {
 
       </div>
 
-      {/* ──────────────── ⚙️ 系統與外觀設定彈窗 (Settings Modal) ──────────────── */}
+      {/* ──────────────── ⚙️ 系統與外觀設定彈窗 ──────────────── */}
       {showSettingsModal && (
         <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-slate-900 border border-slate-700 text-slate-100 rounded-2xl w-full max-w-xs shadow-2xl overflow-hidden font-sans">
@@ -1196,7 +1196,6 @@ export default function MindLogPage() {
                 <span>更換個人專屬頭像</span>
               </button>
 
-              {/* 🔑 修改網站通行碼 */}
               <button
                 onClick={() => {
                   setShowSettingsModal(false);
@@ -1208,7 +1207,6 @@ export default function MindLogPage() {
                 <span>變更網站通行碼 (目前: {headerConfig.accessPassCode || DEFAULT_ACCESS_PASS})</span>
               </button>
 
-              {/* 🔒 登出本機授權 */}
               <button
                 onClick={handleRevokeAuth}
                 className="w-full flex items-center gap-2.5 p-2.5 rounded-xl bg-slate-800 hover:bg-slate-700/80 text-slate-300 border border-slate-700/50 transition-colors"
