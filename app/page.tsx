@@ -8,12 +8,12 @@ import {
   Camera, MapPin, Send, Trash2, Calendar as CalendarIcon, 
   Clock, Edit3, X, ChevronLeft, ChevronRight, RotateCcw, Check,
   Tag, ChevronUp, ChevronDown, Plus, Image as ImageIcon, RotateCcw as ResetIcon, Upload,
-  Cloud, CloudOff, RefreshCw
+  Cloud, CloudOff, RefreshCw, Bug, Copy, Trash
 } from 'lucide-react';
 import { db, MoodRecord, PhotoData, PhotoTag } from '@/lib/db';
 import { supabase } from '@/lib/supabase';
 
-const APP_VERSION = 'Ver. 001.008.001';
+const APP_VERSION = 'Ver. 001.008.002';
 const DEFAULT_TITLE = 'MindLog';
 const SYNC_ROW_ID = 'user_mindlog_store';
 
@@ -70,6 +70,17 @@ const base64ToBlob = (base64: string): Blob => {
 export default function MindLogPage() {
   const todayStr = new Date().toISOString().split('T')[0];
 
+  // 🐞 診斷日誌系統
+  const [debugLogs, setDebugLogs] = useState<string[]>([]);
+  const [showLogModal, setShowLogModal] = useState(false);
+
+  const appendLog = (msg: string) => {
+    const timeStr = new Date().toTimeString().split(' ')[0];
+    const logItem = `[${timeStr}] ${msg}`;
+    console.log(logItem);
+    setDebugLogs((prev) => [logItem, ...prev.slice(0, 60)]);
+  };
+
   // ☁️ 雲端同步狀態
   const [syncStatus, setSyncStatus] = useState<'synced' | 'syncing' | 'error'>('synced');
 
@@ -108,16 +119,20 @@ export default function MindLogPage() {
   const [filterDate, setFilterDate] = useState<string>('');
   const [filterCategory, setFilterCategory] = useState<string>('all');
 
-  // 1. 初次載入與 Supabase 雲端資料同步 (包含封面底圖)
+  // 1. 初次載入與 Supabase 雲端資料同步 (含除錯日誌)
   useEffect(() => {
+    appendLog(`系統初始化啟動: ${APP_VERSION}`);
+
+    // 本地快取預載
     const savedHeader = localStorage.getItem('mindlog_header_config');
     if (savedHeader) {
       try {
         const parsed = JSON.parse(savedHeader);
         setHeaderConfig(parsed);
         setTempTitle(parsed.title || DEFAULT_TITLE);
+        appendLog(`讀取本地 Header 快取: 標題=[${parsed.title}], 封面=${parsed.bgImageUrl ? `有(${parsed.bgImageUrl.length}字元)` : '無'}`);
       } catch (e) {
-        console.error('讀取 Header 快取失敗:', e);
+        appendLog(`讀取本地 Header 快取異常: ${e}`);
       }
     }
 
@@ -128,14 +143,13 @@ export default function MindLogPage() {
         if (Array.isArray(parsedCats) && parsedCats.length > 0) {
           setCategories(parsedCats);
         }
-      } catch (e) {
-        console.error('讀取自訂分類快取失敗:', e);
-      }
+      } catch (e) {}
     }
 
     const pullFromCloud = async () => {
       try {
         setSyncStatus('syncing');
+        appendLog('開始自 Supabase 拉取最新雲端備份...');
         const { data, error } = await supabase
           .from('mindlog_sync')
           .select('*')
@@ -143,12 +157,13 @@ export default function MindLogPage() {
           .single();
 
         if (error && error.code !== 'PGRST116') {
-          console.warn('雲端拉取注意:', error);
+          appendLog(`⚠️ Supabase 查詢警報: ${error.message} (代碼: ${error.code})`);
           setSyncStatus('synced');
           return;
         }
 
         if (data) {
+          appendLog(`✅ 成功連線 Supabase，最後更新時間: ${data.updated_at || '未知'}`);
           if (data.settings) {
             const cloudSettings: HeaderConfig = {
               title: data.settings.title || DEFAULT_TITLE,
@@ -158,6 +173,7 @@ export default function MindLogPage() {
             setHeaderConfig(cloudSettings);
             setTempTitle(cloudSettings.title);
             localStorage.setItem('mindlog_header_config', JSON.stringify(cloudSettings));
+            appendLog(`雲端封面圖片狀態: ${cloudSettings.bgImageUrl ? `已成功拉取 (大小約 ${Math.round(cloudSettings.bgImageUrl.length / 1024)} KB)` : '雲端無封面圖片'}`);
           }
 
           if (data.categories && Array.isArray(data.categories)) {
@@ -178,11 +194,14 @@ export default function MindLogPage() {
                 photos: restoredPhotos
               });
             }
+            appendLog(`成功同步隨筆日記: 共 ${cloudRecords.length} 篇`);
           }
+        } else {
+          appendLog('雲端尚無備份資料');
         }
         setSyncStatus('synced');
-      } catch (err) {
-        console.error('雲端拉取異常:', err);
+      } catch (err: any) {
+        appendLog(`❌ 雲端拉取異常: ${err?.message || err}`);
         setSyncStatus('error');
       }
     };
@@ -196,8 +215,9 @@ export default function MindLogPage() {
       setSyncStatus('syncing');
       const curSettings = newSettings || headerConfig;
       const curCategories = newCategories || categories;
-      const allLocalRecords = await db.records.toArray();
+      appendLog(`開始推送至 Supabase: 封面圖=${curSettings.bgImageUrl ? `包含 (${Math.round(curSettings.bgImageUrl.length / 1024)} KB)` : '無'}`);
 
+      const allLocalRecords = await db.records.toArray();
       const serializableEntries = await Promise.all(
         allLocalRecords.map(async (rec) => {
           const serializedPhotos = await Promise.all(
@@ -220,10 +240,15 @@ export default function MindLogPage() {
         updated_at: new Date().toISOString()
       });
 
-      if (error) throw error;
+      if (error) {
+        appendLog(`❌ Supabase 寫入失敗: ${error.message} (代碼: ${error.code})`);
+        throw error;
+      }
+
+      appendLog('✅ Supabase 雲端資料庫寫入成功！封面圖與資料已同步');
       setSyncStatus('synced');
-    } catch (err) {
-      console.error('推送至雲端失敗:', err);
+    } catch (err: any) {
+      appendLog(`❌ 同步過程拋出例外: ${err?.message || err}`);
       setSyncStatus('error');
     }
   };
@@ -234,13 +259,17 @@ export default function MindLogPage() {
     await pushToCloud(newConfig);
   };
 
+  // 🖼️ 封面圖片選取與壓縮 (強化控制在 120KB 以內確保迅速推送)
   const handleCoverUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
     try {
-      const options = { maxSizeMB: 0.3, maxWidthOrHeight: 1280, useWebWorker: true };
+      appendLog(`選取新封面檔案: ${file.name} (${Math.round(file.size / 1024)} KB)，正在前端壓縮...`);
+      const options = { maxSizeMB: 0.15, maxWidthOrHeight: 1000, useWebWorker: true };
       const compressedBlob = await imageCompression(file, options);
+      appendLog(`封面壓縮完成: 檔案縮小至 ${Math.round(compressedBlob.size / 1024)} KB`);
+
       const reader = new FileReader();
       reader.onloadend = async () => {
         const base64data = reader.result as string;
@@ -248,17 +277,19 @@ export default function MindLogPage() {
         await saveHeaderConfig(updated);
       };
       reader.readAsDataURL(compressedBlob);
-    } catch (err) {
-      console.error('封面照片壓縮失敗:', err);
+    } catch (err: any) {
+      appendLog(`❌ 封面照片壓縮錯誤: ${err?.message || err}`);
     }
   };
 
+  // 👤 頭像上傳
   const handleAvatarUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
     try {
-      const options = { maxSizeMB: 0.1, maxWidthOrHeight: 320, useWebWorker: true };
+      appendLog(`選取頭像照片: ${file.name}`);
+      const options = { maxSizeMB: 0.08, maxWidthOrHeight: 256, useWebWorker: true };
       const compressedBlob = await imageCompression(file, options);
       const reader = new FileReader();
       reader.onloadend = async () => {
@@ -267,16 +298,17 @@ export default function MindLogPage() {
         await saveHeaderConfig(updated);
       };
       reader.readAsDataURL(compressedBlob);
-    } catch (err) {
-      console.error('頭像照片壓縮失敗:', err);
+    } catch (err: any) {
+      appendLog(`❌ 頭像壓縮失敗: ${err?.message || err}`);
     }
   };
 
   const handleResetHeader = async () => {
-    if (window.confirm('確定要還原預設標題、頭像與底色嗎？此設定將同步至手機。')) {
+    if (window.confirm('確定要還原預設標題、頭像與底色嗎？此設定將同步至所有裝置。')) {
       const defConfig: HeaderConfig = { title: DEFAULT_TITLE, bgImageUrl: null, avatarUrl: null };
       setTempTitle(DEFAULT_TITLE);
       setIsEditingHeader(false);
+      appendLog('已執行外觀還原');
       await saveHeaderConfig(defConfig);
     }
   };
@@ -346,7 +378,7 @@ export default function MindLogPage() {
     if (!file) return;
 
     try {
-      const options = { maxSizeMB: 0.8, maxWidthOrHeight: 1600, useWebWorker: true };
+      const options = { maxSizeMB: 0.5, maxWidthOrHeight: 1280, useWebWorker: true };
       const compressedBlob = await imageCompression(file, options);
       const previewUrl = URL.createObjectURL(compressedBlob);
 
@@ -357,8 +389,8 @@ export default function MindLogPage() {
         tags: []
       });
       setIsDrawerOpen(true);
-    } catch (err) {
-      console.error('照片壓縮失敗:', err);
+    } catch (err: any) {
+      appendLog(`❌ 隨筆照片壓縮失敗: ${err?.message || err}`);
     }
   };
 
@@ -386,7 +418,10 @@ export default function MindLogPage() {
   };
 
   const handleSubmit = async () => {
-    if (!note.trim() && !stagedPhoto) return;
+    if (!note.trim() && !stagedPhoto) {
+      alert('請先輸入文字或拍照！');
+      return;
+    }
 
     const moodObj = MOODS.find((m) => m.level === selectedMood)!;
     const assignedDate = new Date(`${targetRecordDate}T12:00:00`);
@@ -481,7 +516,7 @@ export default function MindLogPage() {
     }
   };
 
-  // 🌿 橫幅封面元件 (修復 LucideProps title 報錯與 JSX 閉合)
+  // 🌿 橫幅封面元件
   const renderHeaderBanner = (isMobile = false) => {
     const hasBg = !!headerConfig.bgImageUrl;
 
@@ -524,7 +559,17 @@ export default function MindLogPage() {
             </div>
 
             <div className="flex items-center gap-1.5">
-              {/* 雲端同步狀態指示燈 (title 放置於 div 容器，避免 LucideProps 錯誤) */}
+              {/* 🐞 診斷日誌按鈕 */}
+              <button
+                type="button"
+                onClick={() => setShowLogModal(true)}
+                className="p-1.5 rounded-lg bg-black/40 hover:bg-black/60 text-amber-400 backdrop-blur-sm border border-white/15 transition-all"
+                title="查看系統診斷日誌"
+              >
+                <Bug className="w-3.5 h-3.5" />
+              </button>
+
+              {/* 雲端同步狀態燈 */}
               <div className="bg-black/40 backdrop-blur-sm border border-white/15 p-1.5 rounded-lg mr-0.5">
                 {syncStatus === 'syncing' && (
                   <div title="雲端同步中...">
@@ -1049,6 +1094,56 @@ export default function MindLogPage() {
         </section>
 
       </div>
+
+      {/* ──────────────── 🐞 診斷日誌彈窗 (Modal) ──────────────── */}
+      {showLogModal && (
+        <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-700 text-slate-100 rounded-2xl w-full max-w-lg max-h-[80vh] flex flex-col shadow-2xl overflow-hidden font-mono">
+            <div className="p-3.5 border-b border-slate-800 flex items-center justify-between bg-slate-950">
+              <div className="flex items-center gap-2">
+                <Bug className="w-4 h-4 text-amber-400" />
+                <span className="text-xs font-bold text-slate-200">系統診斷日誌 ({debugLogs.length} 筆)</span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <button
+                  onClick={() => {
+                    navigator.clipboard.writeText(debugLogs.join('\n'));
+                    alert('已複製日誌');
+                  }}
+                  className="p-1 px-2 rounded-lg bg-blue-600/30 text-blue-300 hover:bg-blue-600/50 text-[11px] flex items-center gap-1"
+                >
+                  <Copy className="w-3 h-3" /> 複製
+                </button>
+                <button
+                  onClick={() => setDebugLogs([])}
+                  className="p-1 px-2 rounded-lg bg-slate-800 text-slate-400 hover:text-rose-400 text-[11px] flex items-center gap-1"
+                >
+                  <Trash className="w-3 h-3" /> 清空
+                </button>
+                <button onClick={() => setShowLogModal(false)} className="p-1 text-slate-400 hover:text-white">
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+            <div className="p-3.5 overflow-y-auto flex-1 space-y-1.5 text-[11px] text-slate-300 select-text">
+              {debugLogs.length === 0 ? (
+                <div className="text-center py-10 text-slate-500">目前尚無除錯日誌</div>
+              ) : (
+                debugLogs.map((log, i) => (
+                  <div key={i} className={`leading-relaxed break-all ${log.includes('❌') ? 'text-rose-400 font-semibold' : log.includes('✅') ? 'text-emerald-400' : 'text-slate-300'}`}>
+                    {log}
+                  </div>
+                ))
+              )}
+            </div>
+            <div className="p-2.5 bg-slate-950 border-t border-slate-800 text-[10px] text-slate-500 flex justify-between">
+              <span>MindLog Diagnostic Logs</span>
+              <span>{APP_VERSION}</span>
+            </div>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }
