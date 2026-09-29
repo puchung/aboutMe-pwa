@@ -1,436 +1,566 @@
 'use client';
 
-import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { 
-  Plus, Trash2, Edit3, RefreshCw, Cloud, CloudOff, 
-  DollarSign, Sun, Moon, Bug, BarChart3, PieChart, 
-  Copy, Trash, X, ChevronUp, ChevronDown, Check,
-  BookOpen, Calendar as CalendarIcon, ChevronLeft, ChevronRight, RotateCcw,
-  Camera, Image as ImageIcon, FileText, Tag
-} from 'lucide-react';
-import { getStockPriceWithLog, getUsdExchangeRate, getStockHistory3Mo, HistoryPricePoint } from './actions';
-import { createClient } from '@supabase/supabase-js';
+import React, { useState } from 'react';
+import { useLiveQuery } from 'dexie-react-hooks';
 import imageCompression from 'browser-image-compression';
+import { 
+  Smile, Frown, Meh, Laugh, Angry, 
+  Camera, MapPin, Send, Trash2, Calendar as CalendarIcon, 
+  Clock, Edit3, X, ChevronLeft, ChevronRight, RotateCcw, Check
+} from 'lucide-react';
+import { db, MoodRecord, PhotoData, PhotoTag } from '@/lib/db';
 
-// 初始化 Supabase 客戶端
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
-const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
-const supabase = createClient(supabaseUrl, supabaseAnonKey);
+const APP_VERSION = 'Ver. 001.002.000';
 
-const SYNC_ROW_ID = 'user_portfolio_store_v3';
-const version = 'v001.09.047';
+const MOODS: { level: 1 | 2 | 3 | 4 | 5; label: string; icon: any; color: string }[] = [
+  { level: 5, label: '雀躍', icon: Laugh, color: 'text-amber-500 hover:bg-amber-50' },
+  { level: 4, label: '愉快', icon: Smile, color: 'text-emerald-500 hover:bg-emerald-50' },
+  { level: 3, label: '平靜', icon: Meh, color: 'text-blue-500 hover:bg-blue-50' },
+  { level: 2, label: '焦慮', icon: Frown, color: 'text-orange-500 hover:bg-orange-50' },
+  { level: 1, label: '低落', icon: Angry, color: 'text-rose-500 hover:bg-rose-50' },
+];
 
-// 交易介面型別定義
-interface Transaction {
-  id: string;
-  symbol: string;
-  fundCode?: string;
-  currency: 'TWD' | 'USD';
-  status: '庫存' | '賣出' | '除息';
-  shares: number;
-  price: number;
-  exchangeRate: number;
-  currentPrice: number;
-  date: string;
-  soldDate?: string;
-  dividendAmount?: number;
-}
-
-// 1. 心情（日記）記事型別
-interface MoodRecord {
-  emoji: string;
-  label: string;
-  note: string;
-  updatedAt: string;
-}
-
-interface MoodState {
-  [dateStr: string]: MoodRecord;
-}
-
-export default function PortfolioPage() {
+export default function MindLogPage() {
   const todayStr = new Date().toISOString().split('T')[0];
 
-  // 主題與雲端狀態
-  const [theme, setTheme] = useState<'dark' | 'light'>('dark');
-  const [syncStatus, setSyncStatus] = useState<'synced' | 'syncing' | 'error'>('synced');
-  const [debugLogs, setDebugLogs] = useState<string[]>([]);
-  const [showLogModal, setShowLogModal] = useState(false);
+  const [selectedMood, setSelectedMood] = useState<1 | 2 | 3 | 4 | 5>(3);
+  const [note, setNote] = useState('');
+  const [stagedPhoto, setStagedPhoto] = useState<PhotoData | null>(null);
+  const [tempTagCaption, setTempTagCaption] = useState('');
+  const [pendingTagPos, setPendingTagPos] = useState<{ x: number; y: number } | null>(null);
 
-  // 核心資料狀態
-  const [symbols, setSymbols] = useState<string[]>(['0050', '2330', '安聯台灣大壩']);
-  const [transactions, setTransactions] = useState<Transaction[]>([
-    { id: '1', symbol: '0050', currency: 'TWD', status: '庫存', shares: 1000, price: 150, exchangeRate: 1, currentPrice: 160, date: '2026-01-10' },
-  ]);
-  const [usdRate, setUsdRate] = useState<number>(32.0);
+  // 📅 新增/編輯所指定的記錄日期（支援補登過去日期）
+  const [targetRecordDate, setTargetRecordDate] = useState<string>(todayStr);
 
-  // 頁籤切換
-  const [activeTab, setActiveTab] = useState<'portfolio' | 'mood'>('portfolio');
+  // 📝 編輯狀態管理
+  const [editingRecordId, setEditingRecordId] = useState<number | null>(null);
 
-  // 📖 1. 心情日記狀態彈窗
-  const [showMoodModal, setShowMoodModal] = useState(false);
-  const [moodRecords, setMoodRecords] = useState<MoodState>({});
-  const [activeMoodDate, setActiveMoodDate] = useState<string>(todayStr);
-  const [currentMoodChoice, setCurrentMoodChoice] = useState<{ emoji: string; label: string }>({ emoji: '😐', label: '冷靜觀望' });
-  const [currentMoodNote, setCurrentMoodNote] = useState<string>('');
+  // 📅 日期過濾狀態管理 (空字串代表顯示全部)
+  const [filterDate, setFilterDate] = useState<string>('');
 
-  const MOOD_OPTIONS = [
-    { emoji: '😄', label: '信心滿滿' },
-    { emoji: '😐', label: '冷靜觀望' },
-    { emoji: '😰', label: '焦慮恐慌' },
-    { emoji: '🎉', label: '停利落袋' },
-    { emoji: '😤', label: '懊悔衝動' },
-  ];
+  // 即時讀取本機日記串流 (支援指定日期查詢與全量排序)
+  const entries = useLiveQuery(async () => {
+    if (filterDate) {
+      return db.records.where('dateStr').equals(filterDate).reverse().sortBy('timestamp');
+    }
+    return db.records.orderBy('timestamp').reverse().toArray();
+  }, [filterDate]);
 
-  const appendLog = (msg: string) => {
-    const timeStr = new Date().toTimeString().split(' ')[0];
-    const logItem = `[${timeStr}] ${msg}`;
-    console.log(logItem);
-    setDebugLogs((prev) => [logItem, ...prev.slice(0, 60)]);
-  };
+  // 1. 照片壓縮與預覽
+  const handlePhotoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
 
-  // 初始化載入
-  useEffect(() => {
-    const savedTheme = localStorage.getItem('portfolio_theme') as 'dark' | 'light';
-    if (savedTheme) setTheme(savedTheme);
-
-    const savedMoods = localStorage.getItem('portfolio_moods');
-    if (savedMoods) { try { setMoodRecords(JSON.parse(savedMoods)); } catch(e){} }
-
-    const pullCloud = async () => {
-      try {
-        setSyncStatus('syncing');
-        appendLog('正在從 Supabase 雲端同步資料...');
-        const { data, error } = await supabase.from('mindlog_sync').select('*').eq('id', SYNC_ROW_ID).single();
-        if (data) {
-          if (data.entries?.symbols) setSymbols(data.entries.symbols);
-          if (data.entries?.transactions) setTransactions(data.entries.transactions);
-          if (data.entries?.moodRecords) {
-            setMoodRecords(data.entries.moodRecords);
-            localStorage.setItem('portfolio_moods', JSON.stringify(data.entries.moodRecords));
-          }
-          if (data.settings?.usdRate) setUsdRate(data.settings.usdRate);
-          appendLog('✅ 成功自 Supabase 雲端同步資料');
-        }
-        setSyncStatus('synced');
-      } catch (e: any) {
-        appendLog(`⚠️ 雲端同步異常: ${e?.message || e}`);
-        setSyncStatus('error');
-      }
-    };
-    pullCloud();
-  }, []);
-
-  // 即時雲端儲存
-  const saveToCloudImmediately = async (newTx = transactions, newSyms = symbols, newMoods = moodRecords) => {
     try {
-      setSyncStatus('syncing');
-      localStorage.setItem('portfolio_transactions', JSON.stringify(newTx));
-      localStorage.setItem('portfolio_symbols', JSON.stringify(newSyms));
-      localStorage.setItem('portfolio_moods', JSON.stringify(newMoods));
+      const options = { maxSizeMB: 0.8, maxWidthOrHeight: 1600, useWebWorker: true };
+      const compressedBlob = await imageCompression(file, options);
+      const previewUrl = URL.createObjectURL(compressedBlob);
 
-      const { error } = await supabase.from('mindlog_sync').upsert({
-        id: SYNC_ROW_ID,
-        settings: { usdRate },
-        entries: { symbols: newSyms, transactions: newTx, moodRecords: newMoods },
-        updated_at: new Date().toISOString()
+      setStagedPhoto({
+        id: crypto.randomUUID(),
+        blob: compressedBlob,
+        previewUrl,
+        tags: []
       });
-      if (error) throw error;
-      setSyncStatus('synced');
-      appendLog('雲端已成功即時同步');
-    } catch (e: any) {
-      appendLog(`❌ 雲端儲存失敗: ${e?.message || e}`);
-      setSyncStatus('error');
+    } catch (err) {
+      console.error('照片壓縮失敗:', err);
     }
   };
 
-  // 切換日記日期時載入對應內容
-  useEffect(() => {
-    const record = moodRecords[activeMoodDate];
-    if (record) {
-      setCurrentMoodChoice({ emoji: record.emoji, label: record.label });
-      setCurrentMoodNote(record.note || '');
-    } else {
-      setCurrentMoodChoice({ emoji: '😐', label: '冷靜觀望' });
-      setCurrentMoodNote('');
-    }
-  }, [activeMoodDate, moodRecords]);
+  // 2. 點擊相片觸發釘選心情標籤
+  const handleImageClick = (e: React.MouseEvent<HTMLDivElement>) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const xPercent = ((e.clientX - rect.left) / rect.width) * 100;
+    const yPercent = ((e.clientY - rect.top) / rect.height) * 100;
+    setPendingTagPos({ x: xPercent, y: yPercent });
+  };
 
-  const handleSaveMood = () => {
-    const updated = {
-      ...moodRecords,
-      [activeMoodDate]: {
-        emoji: currentMoodChoice.emoji,
-        label: currentMoodChoice.label,
-        note: currentMoodNote.trim(),
-        updatedAt: new Date().toISOString()
-      }
+  // 3. 儲存照片標籤
+  const addTagToPhoto = () => {
+    if (!stagedPhoto || !pendingTagPos || !tempTagCaption.trim()) return;
+    const newTag: PhotoTag = {
+      id: crypto.randomUUID(),
+      xPercent: pendingTagPos.x,
+      yPercent: pendingTagPos.y,
+      caption: tempTagCaption.trim()
     };
-    setMoodRecords(updated);
-    saveToCloudImmediately(transactions, symbols, updated);
-    setShowMoodModal(false);
-    appendLog(`✅ 已儲存 ${activeMoodDate} 的心態日記 [${currentMoodChoice.label}]`);
+    setStagedPhoto({
+      ...stagedPhoto,
+      tags: [...stagedPhoto.tags, newTag]
+    });
+    setPendingTagPos(null);
+    setTempTagCaption('');
   };
 
-  const handleDeleteMood = () => {
-    if (!moodRecords[activeMoodDate]) return;
-    if (confirm(`確定要刪除 ${activeMoodDate} 的心態紀錄嗎？`)) {
-      const updated = { ...moodRecords };
-      delete updated[activeMoodDate];
-      setMoodRecords(updated);
-      saveToCloudImmediately(transactions, symbols, updated);
-      setCurrentMoodNote('');
-      appendLog(`已刪除 ${activeMoodDate} 的心態記錄`);
+  // 4. 提交或更新日記 (支援指定過去/自訂日期)
+  const handleSubmit = async () => {
+    if (!note.trim() && !stagedPhoto) return;
+
+    const moodObj = MOODS.find(m => m.level === selectedMood)!;
+    
+    // 依據指定的日期產生時間戳記與顯示字串
+    const assignedDate = new Date(`${targetRecordDate}T12:00:00`);
+    const dateStr = targetRecordDate;
+
+    if (editingRecordId) {
+      // ✏️ 更新既有記事
+      await db.records.update(editingRecordId, {
+        dateStr,
+        moodLevel: selectedMood,
+        moodLabel: moodObj.label,
+        note: note.trim(),
+        photos: stagedPhoto ? [stagedPhoto] : [],
+        updatedAt: Date.now(),
+      });
+      setEditingRecordId(null);
+    } else {
+      // ➕ 新增記事 (支援補登過去日期)
+      const newRecord: MoodRecord = {
+        timestamp: assignedDate.getTime(),
+        dateStr,
+        moodLevel: selectedMood,
+        moodLabel: moodObj.label,
+        note: note.trim(),
+        photos: stagedPhoto ? [stagedPhoto] : [],
+        createdAt: assignedDate.toLocaleDateString('zh-TW', { month: '2-digit', day: '2-digit', weekday: 'short' }),
+        appVersion: APP_VERSION
+      };
+      await db.records.add(newRecord);
+    }
+
+    // 重設表單狀態
+    setNote('');
+    setStagedPhoto(null);
+    setPendingTagPos(null);
+    setTargetRecordDate(filterDate || todayStr);
+  };
+
+  // 5. 載入記事進入編輯模式
+  const handleStartEdit = (record: MoodRecord) => {
+    setEditingRecordId(record.id!);
+    setSelectedMood(record.moodLevel);
+    setNote(record.note);
+    setTargetRecordDate(record.dateStr);
+
+    if (record.photos && record.photos.length > 0) {
+      const p = record.photos[0];
+      setStagedPhoto({
+        ...p,
+        previewUrl: p.blob ? URL.createObjectURL(p.blob) : undefined
+      });
+    } else {
+      setStagedPhoto(null);
+    }
+
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  // 6. 取消編輯
+  const handleCancelEdit = () => {
+    setEditingRecordId(null);
+    setNote('');
+    setStagedPhoto(null);
+    setPendingTagPos(null);
+    setTargetRecordDate(filterDate || todayStr);
+  };
+
+  // 7. 刪除記事 (含防誤觸二次確認)
+  const handleDelete = async (record: MoodRecord) => {
+    if (window.confirm(`確定要刪除 ${record.dateStr} 的這篇心情隨筆嗎？\n此動作無法復原。`)) {
+      if (record.id) {
+        await db.records.delete(record.id);
+        if (editingRecordId === record.id) {
+          handleCancelEdit();
+        }
+      }
     }
   };
 
-  const isDark = theme === 'dark';
+  // 8. 右側時間軸日期快速導覽 (前一天 / 後一天)
+  const handleShiftDate = (days: number) => {
+    const baseDate = filterDate ? new Date(filterDate) : new Date();
+    baseDate.setDate(baseDate.getDate() + days);
+    const newDateStr = baseDate.toISOString().split('T')[0];
+    setFilterDate(newDateStr);
+    if (!editingRecordId) {
+      setTargetRecordDate(newDateStr);
+    }
+  };
 
   return (
-    <div className={`min-h-screen font-sans transition-colors ${isDark ? 'bg-slate-950 text-slate-100' : 'bg-slate-100 text-slate-900'}`}>
+    <div className="min-h-screen bg-slate-100 text-slate-800 flex flex-col md:flex-row font-sans">
       
-      {/* 頂部導覽列 */}
-      <header className={`sticky top-0 z-30 border-b px-4 py-3 flex items-center justify-between shadow-sm backdrop-blur-md ${isDark ? 'bg-slate-900/90 border-slate-800' : 'bg-white/90 border-slate-200'}`}>
-        <div className="flex items-center gap-2">
-          <span className="text-xl">📈</span>
-          <h1 className="text-base font-bold tracking-tight">總資產彙整 (台幣) <span className="text-xs font-mono text-emerald-400 ml-1">{version}</span></h1>
-        </div>
-
-        <div className="flex items-center gap-2">
-          {/* 📖 心控日記按鈕 */}
-          <button
-            onClick={() => setShowMoodModal(true)}
-            className={`p-2 rounded-lg border transition flex items-center gap-1.5 text-xs font-semibold ${isDark ? 'bg-slate-800 border-slate-700 hover:bg-slate-700 text-slate-200' : 'bg-white border-slate-300 hover:bg-slate-50 text-slate-700'}`}
-            title="開啟投資心態與交易日記"
-          >
-            <BookOpen className="w-4 h-4 text-emerald-500" />
-            <span className="hidden sm:inline">日記</span>
-            {moodRecords[todayStr] && <span className="text-sm">{moodRecords[todayStr].emoji}</span>}
-          </button>
-
-          {/* 主題切換按鈕 */}
-          <button
-            onClick={() => {
-              const next = isDark ? 'light' : 'dark';
-              setTheme(next);
-              localStorage.setItem('portfolio_theme', next);
-            }}
-            className={`p-2 rounded-lg border transition ${isDark ? 'bg-slate-800 border-slate-700 text-amber-400 hover:bg-slate-700' : 'bg-white border-slate-300 text-slate-700 hover:bg-slate-50'}`}
-            title="切換深色/淺色主題"
-          >
-            {isDark ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
-          </button>
-
-          {/* 除錯日誌按鈕 */}
-          <button
-            onClick={() => setShowLogModal(true)}
-            className={`p-2 rounded-lg border transition relative ${isDark ? 'bg-slate-800 border-slate-700 text-slate-400 hover:text-white' : 'bg-white border-slate-300 text-slate-600 hover:text-black'}`}
-            title="系統除錯日誌"
-          >
-            <Bug className="w-4 h-4 text-amber-500" />
-            {debugLogs.length > 0 && <span className="absolute -top-1 -right-1 bg-amber-500 text-slate-950 text-[9px] font-bold px-1 rounded-full">{debugLogs.length}</span>}
-          </button>
-
-          {/* 雲端同步燈號 */}
-          <div className="flex items-center pl-1">
-            {syncStatus === 'syncing' && <div title="同步中..." className="p-1.5 rounded-lg bg-amber-500/20 text-amber-400"><RefreshCw className="w-4 h-4 animate-spin" /></div>}
-            {syncStatus === 'synced' && <div title="☁️ 雲端已即時同步" className="p-1.5 rounded-lg bg-emerald-500/20 text-emerald-400"><Cloud className="w-4 h-4" /></div>}
-            {syncStatus === 'error' && <div title="❌ 同步異常" className="p-1.5 rounded-lg bg-rose-500/20 text-rose-400"><CloudOff className="w-4 h-4" /></div>}
+      {/* ──────────────── PC 左側固定側邊欄 / 速記區 ──────────────── */}
+      <aside className={`w-full md:w-96 bg-white border-r border-slate-200 p-5 flex flex-col justify-between shrink-0 shadow-sm md:h-screen md:sticky md:top-0 transition-all ${
+        editingRecordId ? 'ring-2 ring-amber-400/80 bg-amber-50/10' : ''
+      }`}>
+        <div>
+          <div className="flex items-center justify-between mb-4">
+            <h1 className="text-xl font-bold tracking-tight text-slate-900 flex items-center gap-2">
+              🌿 <span>MindLog</span>
+            </h1>
+            <span className="text-xs font-mono bg-blue-50 text-blue-600 px-2 py-0.5 rounded border border-blue-200">
+              {APP_VERSION}
+            </span>
           </div>
-        </div>
-      </header>
 
-      {/* 主體內容區 */}
-      <main className="max-w-4xl mx-auto p-4 md:p-6 space-y-6">
-        <div className={`p-6 rounded-2xl border shadow-sm ${isDark ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-200'}`}>
-          <h2 className="text-lg font-bold mb-2">歡迎使用投資資產與心態日記系統</h2>
-          <p className="text-sm opacity-75">請點擊上方導覽列的【日記】按鈕來開啟心態覆盤與日期紀錄視窗，隨時記錄每日盤勢心態與決策。</p>
-        </div>
-      </main>
-
-      {/* 📖 投資心態與交易日記彈窗 (Modal) */}
-      {showMoodModal && (
-        <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className={`border rounded-2xl w-full max-w-md shadow-2xl overflow-hidden flex flex-col font-sans ${isDark ? 'bg-slate-900 border-slate-700 text-slate-100' : 'bg-white border-slate-300 text-slate-900'}`}>
-            
-            {/* 視窗標題 */}
-            <div className={`p-4 border-b flex items-center justify-between ${isDark ? 'bg-slate-950 border-slate-800' : 'bg-slate-50 border-slate-200'}`}>
-              <div className="flex items-center gap-2">
-                <BookOpen className="w-5 h-5 text-emerald-500" />
-                <span className="text-sm font-bold">投資心態與交易日記</span>
-              </div>
-              <button onClick={() => setShowMoodModal(false)} className="p-1 opacity-70 hover:opacity-100">
-                <X className="w-5 h-5" />
+          {/* 編輯中提示條 */}
+          {editingRecordId && (
+            <div className="mb-4 bg-amber-100 border border-amber-300 text-amber-900 px-3 py-1.5 rounded-xl flex items-center justify-between text-xs">
+              <span className="font-semibold flex items-center gap-1">
+                <Edit3 className="w-3.5 h-3.5 text-amber-600" /> 正在編輯 {targetRecordDate} 的記事
+              </span>
+              <button 
+                onClick={handleCancelEdit}
+                className="text-amber-700 hover:text-amber-900 p-0.5"
+                title="取消編輯"
+              >
+                <X className="w-4 h-4" />
               </button>
             </div>
+          )}
 
-            {/* 視窗內容主體 */}
-            <div className="p-5 space-y-4">
-              
-              {/* 日期切換導覽列 */}
-              <div className="flex items-center justify-between gap-2">
+          {/* 📅 指定記錄/補登日期 */}
+          <div className="mb-4">
+            <div className="flex items-center justify-between mb-1.5">
+              <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
+                記錄日期 (可補登過去時間)
+              </label>
+              {targetRecordDate !== todayStr && (
                 <button
-                  onClick={() => {
-                    const d = new Date(activeMoodDate);
-                    d.setDate(d.getDate() - 1);
-                    setActiveMoodDate(d.toISOString().split('T')[0]);
-                  }}
-                  className={`p-1.5 rounded-lg border ${isDark ? 'border-slate-700 hover:bg-slate-800' : 'border-slate-300 hover:bg-slate-100'}`}
-                  title="前一天"
+                  type="button"
+                  onClick={() => setTargetRecordDate(todayStr)}
+                  className="text-[11px] text-blue-600 hover:underline"
                 >
-                  <ChevronLeft className="w-4 h-4" />
+                  切換為今天
                 </button>
-
-                <div className="flex items-center gap-2">
-                  <CalendarIcon className="w-4 h-4 text-emerald-500" />
-                  <input
-                    type="date"
-                    value={activeMoodDate}
-                    onChange={(e) => setActiveMoodDate(e.target.value)}
-                    className={`text-xs font-semibold px-2 py-1.5 rounded-lg border outline-none ${isDark ? 'bg-slate-800 border-slate-700 text-slate-100' : 'bg-slate-50 border-slate-300 text-slate-800'}`}
-                  />
-                </div>
-
-                <div className="flex gap-1">
-                  <button
-                    onClick={() => setActiveMoodDate(todayStr)}
-                    className={`px-2 py-1 text-xs rounded border ${activeMoodDate === todayStr ? 'bg-emerald-600 text-white border-emerald-600 font-bold' : isDark ? 'border-slate-700 hover:bg-slate-800' : 'border-slate-300 hover:bg-slate-100'}`}
-                  >
-                    今天
-                  </button>
-                  <button
-                    onClick={() => {
-                      const d = new Date(activeMoodDate);
-                      d.setDate(d.getDate() + 1);
-                      setActiveMoodDate(d.toISOString().split('T')[0]);
-                    }}
-                    className={`p-1.5 rounded-lg border ${isDark ? 'border-slate-700 hover:bg-slate-800' : 'border-slate-300 hover:bg-slate-100'}`}
-                    title="後一天"
-                  >
-                    <ChevronRight className="w-4 h-4" />
-                  </button>
-                </div>
-              </div>
-
-              {/* 心情心態選擇區 */}
-              <div>
-                <label className="text-xs font-semibold opacity-70 block mb-2">當日交易心態與情緒</label>
-                <div className="grid grid-cols-5 gap-1.5">
-                  {MOOD_OPTIONS.map((m) => {
-                    const isSelected = currentMoodChoice.label === m.label;
-                    return (
-                      <button
-                        key={m.label}
-                        type="button"
-                        onClick={() => setCurrentMoodChoice({ emoji: m.emoji, label: m.label })}
-                        className={`flex flex-col items-center py-2.5 rounded-xl transition-all text-xs font-medium border ${
-                          isSelected 
-                            ? 'bg-emerald-600 text-white border-emerald-500 shadow-md scale-105 font-bold' 
-                            : isDark ? 'bg-slate-800/60 border-slate-700 text-slate-400 hover:bg-slate-800 hover:text-slate-200' : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'
-                        }`}
-                      >
-                        <span className="text-lg mb-1">{m.emoji}</span>
-                        <span className="text-[10px] scale-90">{m.label}</span>
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-
-              {/* 覆盤心得筆記 */}
-              <div>
-                <label className="text-xs font-semibold opacity-70 block mb-1.5">盤勢覆盤與進出場決策筆記</label>
-                <textarea
-                  rows={4}
-                  placeholder="記錄今天的心情、大盤轉折看法、買賣進出場邏輯或檢討事項..."
-                  value={currentMoodNote}
-                  onChange={(e) => setCurrentMoodNote(e.target.value)}
-                  className={`w-full text-xs rounded-xl p-3 outline-none border resize-none leading-relaxed ${isDark ? 'bg-slate-800 border-slate-700 text-slate-100 focus:border-emerald-500' : 'bg-slate-50 border-slate-300 text-slate-900 focus:border-emerald-500'}`}
-                />
-              </div>
-
-              {/* 底部按鈕操作列 */}
-              <div className="flex items-center justify-between pt-2">
-                {moodRecords[activeMoodDate] ? (
-                  <button
-                    type="button"
-                    onClick={handleDeleteMood}
-                    className="text-xs text-rose-500 hover:text-rose-400 font-medium px-2 py-1"
-                  >
-                    刪除此日紀錄
-                  </button>
-                ) : <div />}
-
-                <div className="flex gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setShowMoodModal(false)}
-                    className={`text-xs px-4 py-2 rounded-xl border ${isDark ? 'border-slate-700 hover:bg-slate-800 text-slate-300' : 'border-slate-300 hover:bg-slate-100 text-slate-700'}`}
-                  >
-                    取消
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleSaveMood}
-                    className="text-xs px-5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold shadow-lg shadow-emerald-900/40 flex items-center gap-1.5"
-                  >
-                    <Check className="w-4 h-4" /> 儲存日記
-                  </button>
-                </div>
-              </div>
-
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* 除錯日誌彈窗 (Modal) */}
-      {showLogModal && (
-        <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-700 text-slate-100 rounded-2xl w-full max-w-lg max-h-[80vh] flex flex-col shadow-2xl overflow-hidden font-mono">
-            <div className="p-3.5 border-b border-slate-800 flex items-center justify-between bg-slate-950">
-              <div className="flex items-center gap-2">
-                <Bug className="w-4 h-4 text-amber-400" />
-                <span className="text-xs font-bold text-slate-200">系統診斷日誌 ({debugLogs.length} 筆)</span>
-              </div>
-              <div className="flex items-center gap-1.5">
-                <button
-                  onClick={() => {
-                    navigator.clipboard.writeText(debugLogs.join('\n'));
-                    alert('已複製日誌');
-                  }}
-                  className="p-1 px-2 rounded-lg bg-blue-600/30 text-blue-300 hover:bg-blue-600/50 text-[11px] flex items-center gap-1"
-                >
-                  <Copy className="w-3 h-3" /> 複製
-                </button>
-                <button
-                  onClick={() => setDebugLogs([])}
-                  className="p-1 px-2 rounded-lg bg-slate-800 text-slate-400 hover:text-rose-400 text-[11px] flex items-center gap-1"
-                >
-                  <Trash className="w-3 h-3" /> 清空
-                </button>
-                <button onClick={() => setShowLogModal(false)} className="p-1 text-slate-400 hover:text-white">
-                  <X className="w-4 h-4" />
-                </button>
-              </div>
-            </div>
-            <div className="p-3.5 overflow-y-auto flex-1 space-y-1.5 text-[11px] text-slate-300 select-text">
-              {debugLogs.length === 0 ? (
-                <div className="text-center py-10 text-slate-500">目前尚無除錯日誌</div>
-              ) : (
-                debugLogs.map((log, i) => (
-                  <div key={i} className="leading-relaxed break-all text-slate-300">{log}</div>
-                ))
               )}
             </div>
-            <div className="p-2.5 bg-slate-950 border-t border-slate-800 text-[10px] text-slate-500 flex justify-between">
-              <span>Investment Journal Debugger</span>
-              <span>{version}</span>
+            <div className="flex items-center gap-2 bg-slate-50 p-2 rounded-xl border border-slate-200">
+              <CalendarIcon className="w-4 h-4 text-blue-500 ml-1" />
+              <input
+                type="date"
+                value={targetRecordDate}
+                onChange={(e) => setTargetRecordDate(e.target.value)}
+                className="bg-transparent text-xs font-semibold text-slate-800 outline-none w-full cursor-pointer"
+              />
             </div>
           </div>
-        </div>
-      )}
 
+          {/* 心情刻度選擇器 */}
+          <div className="mb-4">
+            <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider block mb-2">當日心情</label>
+            <div className="grid grid-cols-5 gap-1.5 bg-slate-50 p-1.5 rounded-xl border border-slate-200">
+              {MOODS.map((m) => {
+                const IconComponent = m.icon;
+                const isSelected = selectedMood === m.level;
+                return (
+                  <button
+                    key={m.level}
+                    type="button"
+                    onClick={() => setSelectedMood(m.level)}
+                    className={`flex flex-col items-center py-2 rounded-lg transition-all text-xs font-medium ${
+                      isSelected 
+                        ? 'bg-white shadow text-slate-900 font-bold scale-105' 
+                        : 'text-slate-400 hover:text-slate-600'
+                    }`}
+                  >
+                    <IconComponent className={`w-5 h-5 mb-1 ${isSelected ? m.color.split(' ')[0] : ''}`} />
+                    {m.label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* 照片上傳與釘選預覽區 */}
+          <div className="mb-4">
+            <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider block mb-2">相片紀錄</label>
+            {!stagedPhoto ? (
+              <label className="flex flex-col items-center justify-center border-2 border-dashed border-slate-300 rounded-xl p-4 cursor-pointer hover:border-blue-400 bg-slate-50 transition-colors">
+                <Camera className="w-6 h-6 text-slate-400 mb-1" />
+                <span className="text-xs text-slate-500">拍照或選取照片</span>
+                <input 
+                  type="file" 
+                  accept="image/*" 
+                  capture="environment" 
+                  className="hidden" 
+                  onChange={handlePhotoUpload} 
+                />
+              </label>
+            ) : (
+              <div className="relative border border-slate-200 rounded-xl overflow-hidden bg-black/5">
+                <div 
+                  className="relative cursor-crosshair group"
+                  onClick={handleImageClick}
+                >
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img 
+                    src={stagedPhoto.previewUrl} 
+                    alt="預覽" 
+                    className="w-full h-44 object-cover select-none" 
+                  />
+                  {stagedPhoto.tags.map((tag) => (
+                    <div 
+                      key={tag.id}
+                      style={{ top: `${tag.yPercent}%`, left: `${tag.xPercent}%` }}
+                      className="absolute -translate-x-1/2 -translate-y-1/2 bg-black/75 backdrop-blur-md text-white text-[11px] px-2 py-0.5 rounded-full shadow pointer-events-none flex items-center gap-1"
+                    >
+                      <MapPin className="w-2.5 h-2.5 text-amber-400" />
+                      {tag.caption}
+                    </div>
+                  ))}
+                  <div className="absolute inset-0 bg-black/20 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white text-xs font-medium pointer-events-none">
+                    點擊照片釘選心情氣泡
+                  </div>
+                </div>
+
+                {/* 釘選輸入浮層 */}
+                {pendingTagPos && (
+                  <div className="p-2 bg-white border-t border-slate-200 flex gap-2">
+                    <input 
+                      type="text" 
+                      placeholder="在這處留一句話..." 
+                      value={tempTagCaption}
+                      onChange={(e) => setTempTagCaption(e.target.value)}
+                      className="text-xs flex-1 border border-slate-300 rounded px-2 py-1 outline-none focus:border-blue-500"
+                      autoFocus
+                    />
+                    <button 
+                      onClick={addTagToPhoto} 
+                      className="bg-blue-600 text-white text-xs px-2.5 py-1 rounded font-medium"
+                    >
+                      標記
+                    </button>
+                  </div>
+                )}
+
+                <button 
+                  onClick={() => setStagedPhoto(null)} 
+                  className="absolute top-2 right-2 bg-white/80 backdrop-blur p-1 rounded-full text-slate-700 hover:text-rose-600 shadow"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            )}
+          </div>
+
+          {/* 隨筆內容輸入 */}
+          <div className="mb-4">
+            <textarea
+              rows={3}
+              placeholder="記錄該日的心情隨筆..."
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+              className="w-full text-sm border border-slate-200 rounded-xl p-3 outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 resize-none"
+            />
+          </div>
+
+          {/* 送出與取消操作按鈕 */}
+          <div className="flex gap-2">
+            {editingRecordId && (
+              <button
+                type="button"
+                onClick={handleCancelEdit}
+                className="flex-1 bg-slate-200 hover:bg-slate-300 text-slate-700 font-medium py-2.5 px-4 rounded-xl transition text-sm"
+              >
+                取消
+              </button>
+            )}
+            <button
+              onClick={handleSubmit}
+              className={`flex-1 text-white font-medium py-2.5 px-4 rounded-xl flex items-center justify-center gap-2 shadow-sm transition text-sm ${
+                editingRecordId ? 'bg-amber-600 hover:bg-amber-700' : 'bg-blue-600 hover:bg-blue-700'
+              }`}
+            >
+              {editingRecordId ? (
+                <>
+                  <Check className="w-4 h-4" /> 儲存修改
+                </>
+              ) : (
+                <>
+                  <Send className="w-4 h-4" /> 儲存至 {targetRecordDate}
+                </>
+              )}
+            </button>
+          </div>
+        </div>
+
+        {/* 底部狀態列 */}
+        <div className="pt-4 border-t border-slate-100 flex items-center justify-between text-xs text-slate-400">
+          <span>支援回溯歷史記錄</span>
+          <span className="font-mono">{APP_VERSION}</span>
+        </div>
+      </aside>
+
+      {/* ──────────────── 右側主內容：心情時間軸與日期過濾 ──────────────── */}
+      <main className="flex-1 max-w-2xl mx-auto w-full p-4 md:p-8">
+        
+        {/* 📅 指定日期過濾工具列 */}
+        <div className="bg-white rounded-2xl p-3.5 border border-slate-200/90 shadow-sm mb-6 flex flex-col sm:flex-row items-center justify-between gap-3">
+          <div className="flex items-center gap-2 w-full sm:w-auto justify-between sm:justify-start">
+            <button
+              onClick={() => handleShiftDate(-1)}
+              className="p-1.5 rounded-lg border border-slate-200 hover:bg-slate-50 text-slate-600"
+              title="前一天"
+            >
+              <ChevronLeft className="w-4 h-4" />
+            </button>
+
+            <div className="flex items-center gap-1.5">
+              <CalendarIcon className="w-4 h-4 text-blue-600" />
+              <input
+                type="date"
+                value={filterDate}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  setFilterDate(val);
+                  if (val && !editingRecordId) {
+                    setTargetRecordDate(val);
+                  }
+                }}
+                className="text-xs font-semibold text-slate-700 border border-slate-200 rounded-lg px-2 py-1 outline-none focus:border-blue-500"
+              />
+            </div>
+
+            <button
+              onClick={() => handleShiftDate(1)}
+              className="p-1.5 rounded-lg border border-slate-200 hover:bg-slate-50 text-slate-600"
+              title="後一天"
+            >
+              <ChevronRight className="w-4 h-4" />
+            </button>
+          </div>
+
+          <div className="flex items-center gap-2 w-full sm:w-auto justify-end text-xs">
+            <button
+              onClick={() => {
+                setFilterDate(todayStr);
+                if (!editingRecordId) setTargetRecordDate(todayStr);
+              }}
+              className={`px-2.5 py-1 rounded-lg border transition ${
+                filterDate === todayStr
+                  ? 'bg-blue-50 text-blue-600 border-blue-200 font-semibold'
+                  : 'border-slate-200 text-slate-600 hover:bg-slate-50'
+              }`}
+            >
+              今天
+            </button>
+            <button
+              onClick={() => setFilterDate('')}
+              className={`px-2.5 py-1 rounded-lg border transition flex items-center gap-1 ${
+                !filterDate
+                  ? 'bg-blue-600 text-white border-blue-600 font-semibold shadow-sm'
+                  : 'border-slate-200 text-slate-600 hover:bg-slate-50'
+              }`}
+            >
+              <RotateCcw className="w-3 h-3" /> 顯示全部
+            </button>
+          </div>
+        </div>
+
+        {/* 標題與筆數狀態 */}
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-base font-bold text-slate-900 flex items-center gap-2">
+            <Clock className="w-4 h-4 text-slate-500" /> 
+            {filterDate ? `指定日期：${filterDate}` : '完整時間軸'}
+          </h2>
+          <span className="text-xs text-slate-400">共 {entries?.length || 0} 篇記錄</span>
+        </div>
+
+        {/* 日記清單 */}
+        <div className="space-y-4">
+          {entries?.map((record) => {
+            const mood = MOODS.find(m => m.level === record.moodLevel);
+            const Icon = mood?.icon || Meh;
+            const isEditing = editingRecordId === record.id;
+
+            return (
+              <article 
+                key={record.id} 
+                className={`bg-white rounded-2xl p-4 border transition-all shadow-sm ${
+                  isEditing ? 'border-amber-400 ring-2 ring-amber-400/20' : 'border-slate-200/80'
+                }`}
+              >
+                <div className="flex items-center justify-between mb-3">
+                  <div className="flex items-center gap-2">
+                    <div className={`p-1.5 rounded-lg bg-slate-50 ${mood?.color.split(' ')[0]}`}>
+                      <Icon className="w-4 h-4" />
+                    </div>
+                    <span className="text-sm font-semibold text-slate-800">{record.moodLabel}</span>
+                  </div>
+                  
+                  {/* 右上角：日期標籤與操作工具 (編輯/刪除) */}
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-medium text-slate-500 bg-slate-100 px-2 py-0.5 rounded">
+                      {record.dateStr}
+                    </span>
+                    <button
+                      onClick={() => handleStartEdit(record)}
+                      className="p-1 rounded text-slate-400 hover:text-amber-600 hover:bg-amber-50 transition"
+                      title="編輯此記事"
+                    >
+                      <Edit3 className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      onClick={() => handleDelete(record)}
+                      className="p-1 rounded text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition"
+                      title="刪除此記事"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                </div>
+
+                {/* 相片與照片上的心情釘選氣泡 */}
+                {record.photos && record.photos.length > 0 && record.photos[0].blob && (
+                  <div className="relative rounded-xl overflow-hidden mb-3 border border-slate-100 bg-slate-950">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={URL.createObjectURL(record.photos[0].blob)}
+                      alt="記錄照片"
+                      className="w-full max-h-96 object-cover"
+                    />
+                    {record.photos[0].tags?.map((tag) => (
+                      <div
+                        key={tag.id}
+                        style={{ top: `${tag.yPercent}%`, left: `${tag.xPercent}%` }}
+                        className="absolute -translate-x-1/2 -translate-y-1/2 bg-black/70 backdrop-blur-md text-white text-xs px-2.5 py-1 rounded-full shadow-lg border border-white/20 flex items-center gap-1.5"
+                      >
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                        {tag.caption}
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {record.note && (
+                  <p className="text-sm text-slate-700 leading-relaxed whitespace-pre-line">
+                    {record.note}
+                  </p>
+                )}
+
+                <div className="mt-3 pt-2 border-t border-slate-100 flex items-center justify-between text-[11px] text-slate-400">
+                  <span>
+                    紀錄歸檔日期：{record.dateStr}
+                    {record.updatedAt && ' (已編輯)'}
+                  </span>
+                  <span className="font-mono text-[10px] text-slate-300">{record.appVersion}</span>
+                </div>
+              </article>
+            );
+          })}
+
+          {(!entries || entries.length === 0) && (
+            <div className="text-center py-16 text-slate-400 border border-dashed rounded-2xl bg-white/50">
+              <CalendarIcon className="w-8 h-8 mx-auto mb-2 opacity-40" />
+              <p className="text-sm">
+                {filterDate ? `${filterDate} 尚無任何心情記錄` : '尚無心情紀錄，隨時拍下第一張照片吧！'}
+              </p>
+            </div>
+          )}
+        </div>
+      </main>
     </div>
   );
 }
