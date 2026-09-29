@@ -8,12 +8,12 @@ import {
   Camera, MapPin, Send, Trash2, Calendar as CalendarIcon, 
   Clock, Edit3, X, ChevronLeft, ChevronRight, RotateCcw, Check,
   Tag, ChevronUp, ChevronDown, Plus, Image as ImageIcon, RotateCcw as ResetIcon, Upload,
-  Cloud, CloudOff, RefreshCw, Bug, Copy, Trash
+  Cloud, CloudOff, RefreshCw, Bug, Copy, Trash, Settings
 } from 'lucide-react';
 import { db, MoodRecord, PhotoData, PhotoTag } from '@/lib/db';
 import { supabase } from '@/lib/supabase';
 
-const APP_VERSION = 'Ver. 001.008.004';
+const APP_VERSION = 'Ver. 001.008.005';
 const DEFAULT_TITLE = 'MindLog';
 const SYNC_ROW_ID = 'user_mindlog_store';
 
@@ -73,6 +73,9 @@ export default function MindLogPage() {
   // 🐞 診斷日誌系統
   const [debugLogs, setDebugLogs] = useState<string[]>([]);
   const [showLogModal, setShowLogModal] = useState(false);
+
+  // ⚙️ 系統與外觀設定彈窗
+  const [showSettingsModal, setShowSettingsModal] = useState(false);
 
   const appendLog = (msg: string) => {
     const timeStr = new Date().toTimeString().split(' ')[0];
@@ -519,7 +522,7 @@ export default function MindLogPage() {
     }
   };
 
-  // 🌿 橫幅封面元件：手機維持 h-36，NB 專屬擴大 min-h-[190px] 且頭像加大
+  // 🌿 橫幅封面元件：右上角功能全面收納至純 ⚙️ 齒輪 ICON
   const renderHeaderBanner = (isMobile = false) => {
     const hasBg = !!headerConfig.bgImageUrl;
 
@@ -536,45 +539,20 @@ export default function MindLogPage() {
           backgroundPosition: 'center',
         } : {}}
       >
-        {/* 對比度保護暗色漸層遮罩：NB 減輕中間層，加強照片細節清晰度 */}
+        {/* 對比度保護暗色漸層遮罩 */}
         {hasBg && (
           <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/35 to-black/20 md:from-black/80 md:via-black/25 md:to-black/10 pointer-events-none" />
         )}
 
         <div className={`relative z-10 flex flex-col justify-between h-full p-4 ${isMobile ? 'h-36' : 'min-h-[130px] md:min-h-[190px]'}`}>
+          
+          {/* 上排功能鍵：左側留白，右側僅放雲端狀態燈與純 ⚙️ 齒輪按鈕 */}
           <div className="flex items-center justify-between">
-            <div className="flex items-center gap-1.5">
-              <button
-                type="button"
-                onClick={() => avatarFileRef.current?.click()}
-                className="p-1.5 rounded-lg bg-black/40 hover:bg-black/60 text-white backdrop-blur-sm border border-white/15 transition-all text-xs flex items-center gap-1"
-                title="上傳專屬頭像"
-              >
-                <Upload className="w-3.5 h-3.5 text-blue-400" />
-                <span className="text-[10px]">換頭像</span>
-              </button>
-              <input 
-                ref={avatarFileRef} 
-                type="file" 
-                accept="image/*" 
-                className="hidden" 
-                onChange={handleAvatarUpload} 
-              />
-            </div>
+            <div />
 
             <div className="flex items-center gap-1.5">
-              {/* 🐞 診斷日誌按鈕 */}
-              <button
-                type="button"
-                onClick={() => setShowLogModal(true)}
-                className="p-1.5 rounded-lg bg-black/40 hover:bg-black/60 text-amber-400 backdrop-blur-sm border border-white/15 transition-all"
-                title="查看系統診斷日誌"
-              >
-                <Bug className="w-3.5 h-3.5" />
-              </button>
-
               {/* 雲端同步狀態燈 */}
-              <div className="bg-black/40 backdrop-blur-sm border border-white/15 p-1.5 rounded-lg mr-0.5">
+              <div className="bg-black/40 backdrop-blur-sm border border-white/15 p-1.5 rounded-xl">
                 {syncStatus === 'syncing' && (
                   <div title="雲端同步中...">
                     <RefreshCw className="w-3.5 h-3.5 text-amber-400 animate-spin" />
@@ -592,36 +570,19 @@ export default function MindLogPage() {
                 )}
               </div>
 
+              {/* ⚙️ 齒輪設定按鈕 (純 ICON，無文字) */}
               <button
                 type="button"
-                onClick={() => headerFileRef.current?.click()}
-                className="p-1.5 rounded-lg bg-black/40 hover:bg-black/60 text-white backdrop-blur-sm border border-white/15 transition-all text-xs flex items-center gap-1"
-                title="上傳自訂背景相片"
+                onClick={() => setShowSettingsModal(true)}
+                className="p-1.5 rounded-xl bg-black/40 hover:bg-black/60 text-white backdrop-blur-sm border border-white/15 transition-all shadow-sm active:scale-95"
+                title="系統與外觀設定"
               >
-                <ImageIcon className="w-3.5 h-3.5 text-emerald-400" />
-                <span className="text-[10px]">換封面</span>
+                <Settings className="w-4 h-4 text-slate-200" />
               </button>
-              <input 
-                ref={headerFileRef} 
-                type="file" 
-                accept="image/*" 
-                className="hidden" 
-                onChange={handleCoverUpload} 
-              />
-
-              {(hasBg || headerConfig.avatarUrl) && (
-                <button
-                  type="button"
-                  onClick={handleResetHeader}
-                  className="p-1.5 rounded-lg bg-black/40 hover:bg-rose-900/60 text-white backdrop-blur-sm border border-white/15 transition-all"
-                  title="還原預設外觀"
-                >
-                  <ResetIcon className="w-3.5 h-3.5 text-slate-300 hover:text-rose-400" />
-                </button>
-              )}
             </div>
           </div>
 
+          {/* 下排：使用者頭像與標題文字 */}
           <div className="mt-auto">
             {!isEditingHeader ? (
               <div className="flex items-center justify-between group">
@@ -633,7 +594,7 @@ export default function MindLogPage() {
                   className="flex items-center gap-2.5 md:gap-3.5 cursor-pointer select-none"
                   title="點擊修改日記名稱"
                 >
-                  {/* 使用者自訂頭像：手機維持 w-10 h-10 圓形，NB 擴大為 w-14 h-14 圓角卡片 */}
+                  {/* 使用者自訂頭像 (點擊頭像本身亦可快速換頭像) */}
                   <div 
                     onClick={(e) => {
                       e.stopPropagation();
@@ -654,9 +615,6 @@ export default function MindLogPage() {
                         🌿
                       </div>
                     )}
-                    <span className="absolute -bottom-1 -right-1 bg-blue-600 rounded-full p-0.5 text-white opacity-0 group-hover/avatar:opacity-100 transition-opacity">
-                      <Upload className="w-2.5 h-2.5" />
-                    </span>
                   </div>
 
                   <div className="flex items-center gap-1.5">
@@ -875,7 +833,11 @@ export default function MindLogPage() {
   return (
     <div className="min-h-screen bg-slate-100 text-slate-800 font-sans flex flex-col md:flex-row">
       
-      {/* ──────────────── 💻 PC 端左側固定面板 (NB 微幅拓寬為 w-[410px]，手機不變) ──────────────── */}
+      {/* 隱藏的原生 File Inputs，供彈窗觸發 */}
+      <input ref={headerFileRef} type="file" accept="image/*" className="hidden" onChange={handleCoverUpload} />
+      <input ref={avatarFileRef} type="file" accept="image/*" className="hidden" onChange={handleAvatarUpload} />
+
+      {/* ──────────────── 💻 PC 端左側固定面板 ──────────────── */}
       <aside className="hidden md:flex w-96 md:w-[410px] bg-white border-r border-slate-200 p-5 flex-col justify-between shrink-0 shadow-sm h-screen sticky top-0 overflow-y-auto">
         <div>
           {renderHeaderBanner(false)}
@@ -888,12 +850,11 @@ export default function MindLogPage() {
         </div>
       </aside>
 
-      {/* ──────────────── 📱+💻 主時間軸區塊 (NB 卡片放寬至 max-w-4xl，手機維持 max-w-2xl 滿版) ──────────────── */}
+      {/* ──────────────── 📱+💻 主時間軸區塊 ──────────────── */}
       <div className="flex-1 flex flex-col min-h-screen">
         
         {renderHeaderBanner(true)}
 
-        {/* 核心變更：手機保留 max-w-2xl，NB 端提升至 md:max-w-4xl */}
         <main className="flex-1 max-w-2xl md:max-w-4xl mx-auto w-full p-4 md:p-8 pb-36 md:pb-8">
           
           <div className="bg-white rounded-2xl p-3.5 border border-slate-200/90 shadow-sm mb-5 space-y-3">
@@ -1100,6 +1061,69 @@ export default function MindLogPage() {
         </section>
 
       </div>
+
+      {/* ──────────────── ⚙️ 系統與外觀設定彈窗 (Settings Modal) ──────────────── */}
+      {showSettingsModal && (
+        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-700 text-slate-100 rounded-2xl w-full max-w-xs shadow-2xl overflow-hidden font-sans">
+            <div className="p-3.5 border-b border-slate-800 flex items-center justify-between bg-slate-950">
+              <div className="flex items-center gap-2 font-bold text-xs text-slate-200">
+                <Settings className="w-4 h-4 text-slate-400" />
+                <span>畫面與系統設定</span>
+              </div>
+              <button onClick={() => setShowSettingsModal(false)} className="p-1 text-slate-400 hover:text-white">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-3 space-y-2 text-xs">
+              <button
+                onClick={() => {
+                  setShowSettingsModal(false);
+                  headerFileRef.current?.click();
+                }}
+                className="w-full flex items-center gap-2.5 p-2.5 rounded-xl bg-slate-800 hover:bg-slate-700/80 text-slate-200 border border-slate-700/50 transition-colors"
+              >
+                <ImageIcon className="w-4 h-4 text-emerald-400" />
+                <span>更換封面背景相片</span>
+              </button>
+
+              <button
+                onClick={() => {
+                  setShowSettingsModal(false);
+                  avatarFileRef.current?.click();
+                }}
+                className="w-full flex items-center gap-2.5 p-2.5 rounded-xl bg-slate-800 hover:bg-slate-700/80 text-slate-200 border border-slate-700/50 transition-colors"
+              >
+                <Upload className="w-4 h-4 text-blue-400" />
+                <span>更換個人專屬頭像</span>
+              </button>
+
+              <button
+                onClick={() => {
+                  setShowSettingsModal(false);
+                  setShowLogModal(true);
+                }}
+                className="w-full flex items-center gap-2.5 p-2.5 rounded-xl bg-slate-800 hover:bg-slate-700/80 text-slate-200 border border-slate-700/50 transition-colors"
+              >
+                <Bug className="w-4 h-4 text-amber-400" />
+                <span>查看系統診斷日誌</span>
+              </button>
+
+              <button
+                onClick={() => {
+                  setShowSettingsModal(false);
+                  handleResetHeader();
+                }}
+                className="w-full flex items-center gap-2.5 p-2.5 rounded-xl bg-rose-950/40 hover:bg-rose-900/60 text-rose-300 border border-rose-800/40 transition-colors"
+              >
+                <ResetIcon className="w-4 h-4 text-rose-400" />
+                <span>還原預設外觀與封面</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ──────────────── 🐞 診斷日誌彈窗 ──────────────── */}
       {showLogModal && (
