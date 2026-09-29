@@ -13,7 +13,7 @@ import {
 import { db, MoodRecord, PhotoData, PhotoTag } from '@/lib/db';
 import { supabase } from '@/lib/supabase';
 
-const APP_VERSION = 'Ver. 001.008.000';
+const APP_VERSION = 'Ver. 001.008.001';
 const DEFAULT_TITLE = 'MindLog';
 const SYNC_ROW_ID = 'user_mindlog_store';
 
@@ -108,9 +108,8 @@ export default function MindLogPage() {
   const [filterDate, setFilterDate] = useState<string>('');
   const [filterCategory, setFilterCategory] = useState<string>('all');
 
-  // 1. 初次載入與 Supabase 雲端資料同步 (包含 bgImageUrl 封面)
+  // 1. 初次載入與 Supabase 雲端資料同步 (包含封面底圖)
   useEffect(() => {
-    // 先載入本地快取避免白屏
     const savedHeader = localStorage.getItem('mindlog_header_config');
     if (savedHeader) {
       try {
@@ -134,7 +133,6 @@ export default function MindLogPage() {
       }
     }
 
-    // 從 Supabase 雲端拉取最新資料 (含跨設備的最新封面圖)
     const pullFromCloud = async () => {
       try {
         setSyncStatus('syncing');
@@ -151,7 +149,6 @@ export default function MindLogPage() {
         }
 
         if (data) {
-          // 同步雲端標題、頭像與封面底圖
           if (data.settings) {
             const cloudSettings: HeaderConfig = {
               title: data.settings.title || DEFAULT_TITLE,
@@ -163,13 +160,11 @@ export default function MindLogPage() {
             localStorage.setItem('mindlog_header_config', JSON.stringify(cloudSettings));
           }
 
-          // 同步雲端自訂分類
           if (data.categories && Array.isArray(data.categories)) {
             setCategories(data.categories);
             localStorage.setItem('mindlog_custom_categories', JSON.stringify(data.categories));
           }
 
-          // 同步雲端日記
           if (data.entries && Array.isArray(data.entries)) {
             const cloudRecords = data.entries;
             await db.records.clear();
@@ -195,7 +190,7 @@ export default function MindLogPage() {
     pullFromCloud();
   }, []);
 
-  // 2. 將設定與資料推送到 Supabase (確保封面同步至手機)
+  // 2. 將設定與資料推送到 Supabase
   const pushToCloud = async (newSettings?: HeaderConfig, newCategories?: CategoryOption[]) => {
     try {
       setSyncStatus('syncing');
@@ -233,14 +228,12 @@ export default function MindLogPage() {
     }
   };
 
-  // 儲存 Header 設定並觸發雲端同步
   const saveHeaderConfig = async (newConfig: HeaderConfig) => {
     setHeaderConfig(newConfig);
     localStorage.setItem('mindlog_header_config', JSON.stringify(newConfig));
     await pushToCloud(newConfig);
   };
 
-  // 🖼️ 上傳封面相片 (壓縮後立即推送到雲端)
   const handleCoverUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -260,7 +253,6 @@ export default function MindLogPage() {
     }
   };
 
-  // 👤 上傳頭像 (壓縮後立即推送到雲端)
   const handleAvatarUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -280,7 +272,6 @@ export default function MindLogPage() {
     }
   };
 
-  // 還原預設標題、封面與頭像
   const handleResetHeader = async () => {
     if (window.confirm('確定要還原預設標題、頭像與底色嗎？此設定將同步至手機。')) {
       const defConfig: HeaderConfig = { title: DEFAULT_TITLE, bgImageUrl: null, avatarUrl: null };
@@ -297,7 +288,6 @@ export default function MindLogPage() {
     await saveHeaderConfig(updated);
   };
 
-  // 儲存自訂分類
   const persistCategories = async (newCats: CategoryOption[]) => {
     setCategories(newCats);
     localStorage.setItem('mindlog_custom_categories', JSON.stringify(newCats));
@@ -337,7 +327,6 @@ export default function MindLogPage() {
     }
   };
 
-  // 即時讀取日記清單
   const entries = useLiveQuery(async () => {
     let list: (MoodRecord & { category?: string })[] = [];
     if (filterDate) {
@@ -436,7 +425,6 @@ export default function MindLogPage() {
     setSelectedCategory('daily');
     setIsDrawerOpen(false);
 
-    // 儲存後推送到雲端
     await pushToCloud();
   };
 
@@ -493,7 +481,7 @@ export default function MindLogPage() {
     }
   };
 
-  // 🌿 橫幅封面元件 (含自訂標題、頭像上傳、封面底圖與同步燈號)
+  // 🌿 橫幅封面元件 (修復 LucideProps title 報錯與 JSX 閉合)
   const renderHeaderBanner = (isMobile = false) => {
     const hasBg = !!headerConfig.bgImageUrl;
 
@@ -510,15 +498,11 @@ export default function MindLogPage() {
           backgroundPosition: 'center',
         } : {}}
       >
-        {/* 對比度保護暗色漸層遮罩 */}
         {hasBg && (
           <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/45 to-black/30 pointer-events-none" />
         )}
 
-        {/* 橫幅內容 */}
         <div className={`relative z-10 flex flex-col justify-between h-full p-4 ${isMobile ? 'h-36' : 'min-h-[130px]'}`}>
-          
-          {/* 上排功能鍵：更換頭像、更換封面、還原預設、雲端狀態燈 */}
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-1.5">
               <button
@@ -539,26 +523,26 @@ export default function MindLogPage() {
               />
             </div>
 
-            {/* 雲端同步狀態指示燈 */}
-            <div className="bg-black/40 backdrop-blur-sm border border-white/15 p-1.5 rounded-lg mr-0.5">
+            <div className="flex items-center gap-1.5">
+              {/* 雲端同步狀態指示燈 (title 放置於 div 容器，避免 LucideProps 錯誤) */}
+              <div className="bg-black/40 backdrop-blur-sm border border-white/15 p-1.5 rounded-lg mr-0.5">
                 {syncStatus === 'syncing' && (
-                    <div title="雲端同步中...">
+                  <div title="雲端同步中...">
                     <RefreshCw className="w-3.5 h-3.5 text-amber-400 animate-spin" />
-                    </div>
+                  </div>
                 )}
                 {syncStatus === 'synced' && (
-                    <div title="☁️ 雲端已即時同步">
+                  <div title="☁️ 雲端已即時同步">
                     <Cloud className="w-3.5 h-3.5 text-emerald-400" />
-                    </div>
+                  </div>
                 )}
                 {syncStatus === 'error' && (
-                    <div title="❌ 雲端同步異常">
+                  <div title="❌ 雲端同步異常">
                     <CloudOff className="w-3.5 h-3.5 text-rose-400" />
-                    </div>
-            )}
-            </div>
+                  </div>
+                )}
+              </div>
 
-              {/* 更換封面按鈕 */}
               <button
                 type="button"
                 onClick={() => headerFileRef.current?.click()}
@@ -589,7 +573,6 @@ export default function MindLogPage() {
             </div>
           </div>
 
-          {/* 下排：使用者頭像與標題文字 */}
           <div className="mt-auto">
             {!isEditingHeader ? (
               <div className="flex items-center justify-between group">
@@ -672,7 +655,6 @@ export default function MindLogPage() {
     );
   };
 
-  // 表單核心組件
   const renderEditorForm = () => (
     <div className="space-y-4">
       {editingRecordId && (
@@ -686,7 +668,6 @@ export default function MindLogPage() {
         </div>
       )}
 
-      {/* 記錄日期 */}
       <div>
         <div className="flex items-center justify-between mb-1.5">
           <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
@@ -713,7 +694,6 @@ export default function MindLogPage() {
         </div>
       </div>
 
-      {/* 🏷️ 分類選取與新增 */}
       <div>
         <div className="flex items-center justify-between mb-1.5">
           <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
@@ -758,7 +738,6 @@ export default function MindLogPage() {
         </div>
       </div>
 
-      {/* 當日心情刻度 */}
       <div>
         <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider block mb-2">當日心情</label>
         <div className="grid grid-cols-5 gap-1 bg-slate-50 p-1.5 rounded-xl border border-slate-200">
@@ -782,7 +761,6 @@ export default function MindLogPage() {
         </div>
       </div>
 
-      {/* 相片上傳與預覽 */}
       <div>
         <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider block mb-1.5">相片紀錄</label>
         {!stagedPhoto ? (
@@ -816,7 +794,6 @@ export default function MindLogPage() {
         )}
       </div>
 
-      {/* 隨筆文字 */}
       <div>
         <textarea
           rows={3}
@@ -827,7 +804,6 @@ export default function MindLogPage() {
         />
       </div>
 
-      {/* 送出與取消 */}
       <div className="flex gap-2 pb-1">
         {editingRecordId && (
           <button type="button" onClick={handleCancelEdit} className="flex-1 bg-slate-200 text-slate-700 py-2.5 rounded-xl text-xs font-semibold">
@@ -849,34 +825,28 @@ export default function MindLogPage() {
   return (
     <div className="min-h-screen bg-slate-100 text-slate-800 font-sans flex flex-col md:flex-row">
       
-      {/* ──────────────── 💻 PC 端經典左側固定面板 (包含 PC 專屬橫幅) ──────────────── */}
+      {/* ──────────────── 💻 PC 端經典左側固定面板 ──────────────── */}
       <aside className="hidden md:flex w-96 bg-white border-r border-slate-200 p-5 flex-col justify-between shrink-0 shadow-sm h-screen sticky top-0 overflow-y-auto">
         <div>
-          {/* PC 頂部自訂橫幅 */}
           {renderHeaderBanner(false)}
           {renderEditorForm()}
         </div>
 
-        {/* 💻 PC 側邊欄底部 */}
         <div className="pt-4 border-t border-slate-100 flex items-center justify-between text-xs text-slate-400">
           <span>PC / 手機自適應架構</span>
           <span>共 {entries?.length || 0} 篇</span>
         </div>
       </aside>
 
-      {/* ──────────────── 📱+💻 主時間軸區塊 (手機滿版橫幅置頂) ──────────────── */}
+      {/* ──────────────── 📱+💻 主時間軸區塊 ──────────────── */}
       <div className="flex-1 flex flex-col min-h-screen">
         
-        {/* 手機專屬頂部橫幅封面 (置頂滿版) */}
         {renderHeaderBanner(true)}
 
-        {/* 時間軸主要容器 */}
         <main className="flex-1 max-w-2xl mx-auto w-full p-4 md:p-8 pb-36 md:pb-8">
           
-          {/* 📅 日期與分類綜合過濾工具列 */}
           <div className="bg-white rounded-2xl p-3.5 border border-slate-200/90 shadow-sm mb-5 space-y-3">
             
-            {/* 上排：日期篩選 */}
             <div className="flex flex-col sm:flex-row items-center justify-between gap-2.5 pb-2.5 border-b border-slate-100">
               <div className="flex items-center gap-2 w-full sm:w-auto justify-between sm:justify-start">
                 <button onClick={() => handleShiftDate(-1)} className="p-1.5 rounded-lg border border-slate-200 hover:bg-slate-50 text-slate-600" title="前一天">
@@ -925,7 +895,6 @@ export default function MindLogPage() {
               </div>
             </div>
 
-            {/* 下排：分類過濾列 */}
             <div className="flex items-center gap-1.5 overflow-x-auto pb-1 text-xs">
               <span className="text-slate-400 font-medium whitespace-nowrap mr-1 flex items-center gap-1">
                 <Tag className="w-3 h-3" /> 分類:
@@ -957,7 +926,6 @@ export default function MindLogPage() {
             </div>
           </div>
 
-          {/* 筆數與狀態標示 */}
           <div className="flex items-center justify-between mb-3 px-1">
             <h2 className="text-sm font-bold text-slate-900 flex items-center gap-1.5">
               <Clock className="w-3.5 h-3.5 text-slate-500" /> 
@@ -970,7 +938,6 @@ export default function MindLogPage() {
             </h2>
           </div>
 
-          {/* 日記卡片列表 */}
           <div className="space-y-4">
             {entries?.map((record) => {
               const mood = MOODS.find((m) => m.level === record.moodLevel);
@@ -993,7 +960,6 @@ export default function MindLogPage() {
                       <span className="text-sm font-semibold text-slate-800">{record.moodLabel}</span>
                     </div>
                     
-                    {/* 分類標籤、日期與編輯按鈕 */}
                     <div className="flex items-center gap-2">
                       <span className={`text-[11px] font-medium px-2 py-0.5 rounded-md border flex items-center gap-0.5 ${categoryObj?.tagColor || 'bg-slate-100 text-slate-600'}`}>
                         <span>{categoryObj?.icon || '📌'}</span>
@@ -1012,7 +978,6 @@ export default function MindLogPage() {
                     </div>
                   </div>
 
-                  {/* 照片與氣泡標籤 */}
                   {record.photos && record.photos.length > 0 && record.photos[0].blob && (
                     <div className="relative rounded-xl overflow-hidden mb-3 border border-slate-100 bg-slate-950">
                       {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -1050,7 +1015,6 @@ export default function MindLogPage() {
             )}
           </div>
 
-          {/* 📍 網頁最下方的版本訊息列 */}
           <footer className="mt-12 mb-4 text-center">
             <span className="inline-block text-[11px] font-mono text-slate-400 bg-slate-200/60 border border-slate-200 px-3 py-1 rounded-full shadow-sm">
               MindLog PWA · {APP_VERSION}
@@ -1059,7 +1023,6 @@ export default function MindLogPage() {
 
         </main>
 
-        {/* ──────────────── 📱 手機端專屬：吸底拇指常駐抽屜 ──────────────── */}
         <section className={`md:hidden fixed bottom-0 left-0 right-0 z-40 bg-white border-t border-slate-200/90 shadow-[0_-8px_30px_rgba(0,0,0,0.12)] transition-all duration-300 rounded-t-3xl max-w-2xl mx-auto ${
           isDrawerOpen ? 'max-h-[85vh] overflow-y-auto' : 'max-h-20'
         } ${editingRecordId ? 'ring-2 ring-amber-400' : ''}`}>
