@@ -8,16 +8,17 @@ import {
   Camera, MapPin, Send, Trash2, Calendar as CalendarIcon, 
   Clock, Edit3, X, ChevronLeft, ChevronRight, RotateCcw, Check,
   Tag, ChevronUp, ChevronDown, Plus, Image as ImageIcon, RotateCcw as ResetIcon, Upload,
-  Cloud, CloudOff, RefreshCw, Bug, Copy, Trash, Settings, Lock, KeyRound, LogOut
+  Cloud, CloudOff, RefreshCw, Bug, Copy, Trash, Settings, Lock, KeyRound, LogOut, Images
 } from 'lucide-react';
 import { db, MoodRecord, PhotoData, PhotoTag } from '@/lib/db';
 import { supabase } from '@/lib/supabase';
 
-const APP_VERSION = 'Ver. 001.009.001';
+const APP_VERSION = 'Ver. 001.010.000';
 const DEFAULT_TITLE = 'MindLog';
 const SYNC_ROW_ID = 'user_mindlog_store';
 const DEFAULT_ACCESS_PASS = '8888';
 const AUTH_TOKEN_KEY = 'mindlog_auth_token_v1';
+const MAX_PHOTOS_PER_ENTRY = 6;
 
 interface CategoryOption {
   id: string;
@@ -93,7 +94,7 @@ export default function MindLogPage() {
     setDebugLogs((prev) => [logItem, ...prev.slice(0, 60)]);
   };
 
-  // ☁️ 雲端同步狀態
+  // ☁️️ 雲端同步狀態
   const [syncStatus, setSyncStatus] = useState<'synced' | 'syncing' | 'error'>('synced');
 
   // 🌿 標題、封面與頭像設定
@@ -118,7 +119,10 @@ export default function MindLogPage() {
 
   const [selectedMood, setSelectedMood] = useState<1 | 2 | 3 | 4 | 5>(3);
   const [note, setNote] = useState('');
-  const [stagedPhoto, setStagedPhoto] = useState<PhotoData | null>(null);
+  
+  // 📸 多照片狀態管理 (最多 6 張)
+  const [stagedPhotos, setStagedPhotos] = useState<PhotoData[]>([]);
+  const [activePhotoIndex, setActivePhotoIndex] = useState<number>(0);
   const [tempTagCaption, setTempTagCaption] = useState('');
   const [pendingTagPos, setPendingTagPos] = useState<{ x: number; y: number } | null>(null);
 
@@ -294,7 +298,7 @@ export default function MindLogPage() {
             (rec.photos || []).map(async (p) => ({
               id: p.id,
               caption: p.tags?.[0]?.caption || '',
-              tags: p.tags,
+              tags: p.tags || [],
               base64: p.blob ? await blobToBase64(p.blob) : null
             }))
           );
@@ -442,25 +446,55 @@ export default function MindLogPage() {
     return list;
   }, [filterDate, filterCategory, isAuthenticated]);
 
-  const handlePhotoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+  // 📸 多照片批次上傳與壓縮處理 (上限 6 張)
+  const handlePhotosUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files || []);
+    if (!files.length) return;
+
+    const remainingSlots = MAX_PHOTOS_PER_ENTRY - stagedPhotos.length;
+    if (remainingSlots <= 0) {
+      alert(`單篇隨筆最多只能上傳 ${MAX_PHOTOS_PER_ENTRY} 張照片！`);
+      return;
+    }
+
+    const selectedFiles = files.slice(0, remainingSlots);
+    if (files.length > remainingSlots) {
+      alert(`已達上限，僅選取前 ${remainingSlots} 張照片。`);
+    }
 
     try {
-      const options = { maxSizeMB: 0.5, maxWidthOrHeight: 1280, useWebWorker: true };
-      const compressedBlob = await imageCompression(file, options);
-      const previewUrl = URL.createObjectURL(compressedBlob);
+      appendLog(`開始處理 ${selectedFiles.length} 張照片壓縮...`);
+      const options = { maxSizeMB: 0.35, maxWidthOrHeight: 1280, useWebWorker: true };
 
-      setStagedPhoto({
-        id: crypto.randomUUID(),
-        blob: compressedBlob,
-        previewUrl,
-        tags: []
-      });
+      const compressedList: PhotoData[] = await Promise.all(
+        selectedFiles.map(async (file) => {
+          const compressedBlob = await imageCompression(file, options);
+          return {
+            id: crypto.randomUUID(),
+            blob: compressedBlob,
+            previewUrl: URL.createObjectURL(compressedBlob),
+            tags: []
+          };
+        })
+      );
+
+      setStagedPhotos((prev) => [...prev, ...compressedList]);
       setIsDrawerOpen(true);
+      appendLog(`成功批次加入 ${compressedList.length} 張相片`);
     } catch (err: any) {
-      appendLog(`❌ 隨筆照片壓縮失敗: ${err?.message || err}`);
+      appendLog(`❌ 相片壓縮失敗: ${err?.message || err}`);
     }
+  };
+
+  const handleRemovePhoto = (photoId: string) => {
+    setStagedPhotos((prev) => {
+      const filtered = prev.filter((p) => p.id !== photoId);
+      if (activePhotoIndex >= filtered.length) {
+        setActivePhotoIndex(Math.max(0, filtered.length - 1));
+      }
+      return filtered;
+    });
+    setPendingTagPos(null);
   };
 
   const handleImageClick = (e: React.MouseEvent<HTMLDivElement>) => {
@@ -471,24 +505,28 @@ export default function MindLogPage() {
   };
 
   const addTagToPhoto = () => {
-    if (!stagedPhoto || !pendingTagPos || !tempTagCaption.trim()) return;
+    if (!stagedPhotos[activePhotoIndex] || !pendingTagPos || !tempTagCaption.trim()) return;
     const newTag: PhotoTag = {
       id: crypto.randomUUID(),
       xPercent: pendingTagPos.x,
       yPercent: pendingTagPos.y,
       caption: tempTagCaption.trim()
     };
-    setStagedPhoto({
-      ...stagedPhoto,
-      tags: [...stagedPhoto.tags, newTag]
-    });
+
+    setStagedPhotos((prev) =>
+      prev.map((p, idx) =>
+        idx === activePhotoIndex
+          ? { ...p, tags: [...(p.tags || []), newTag] }
+          : p
+      )
+    );
     setPendingTagPos(null);
     setTempTagCaption('');
   };
 
   const handleSubmit = async () => {
-    if (!note.trim() && !stagedPhoto) {
-      alert('請先輸入文字或拍照！');
+    if (!note.trim() && stagedPhotos.length === 0) {
+      alert('請先輸入文字或上傳照片！');
       return;
     }
 
@@ -503,7 +541,7 @@ export default function MindLogPage() {
         moodLevel: selectedMood,
         moodLabel: moodObj.label,
         note: note.trim(),
-        photos: stagedPhoto ? [stagedPhoto] : [],
+        photos: stagedPhotos,
         updatedAt: Date.now(),
       });
       setEditingRecordId(null);
@@ -515,7 +553,7 @@ export default function MindLogPage() {
         moodLevel: selectedMood,
         moodLabel: moodObj.label,
         note: note.trim(),
-        photos: stagedPhoto ? [stagedPhoto] : [],
+        photos: stagedPhotos,
         createdAt: assignedDate.toLocaleDateString('zh-TW', { month: '2-digit', day: '2-digit', weekday: 'short' }),
         appVersion: APP_VERSION
       };
@@ -523,7 +561,8 @@ export default function MindLogPage() {
     }
 
     setNote('');
-    setStagedPhoto(null);
+    setStagedPhotos([]);
+    setActivePhotoIndex(0);
     setPendingTagPos(null);
     setTargetRecordDate(filterDate || todayStr);
     setSelectedCategory('daily');
@@ -540,13 +579,14 @@ export default function MindLogPage() {
     setTargetRecordDate(record.dateStr);
 
     if (record.photos && record.photos.length > 0) {
-      const p = record.photos[0];
-      setStagedPhoto({
+      const restored = record.photos.map((p) => ({
         ...p,
         previewUrl: p.blob ? URL.createObjectURL(p.blob) : undefined
-      });
+      }));
+      setStagedPhotos(restored);
+      setActivePhotoIndex(0);
     } else {
-      setStagedPhoto(null);
+      setStagedPhotos([]);
     }
 
     setIsDrawerOpen(true);
@@ -556,7 +596,8 @@ export default function MindLogPage() {
   const handleCancelEdit = () => {
     setEditingRecordId(null);
     setNote('');
-    setStagedPhoto(null);
+    setStagedPhotos([]);
+    setActivePhotoIndex(0);
     setPendingTagPos(null);
     setTargetRecordDate(filterDate || todayStr);
     setSelectedCategory('daily');
@@ -711,169 +752,342 @@ export default function MindLogPage() {
     );
   };
 
-  const renderEditorForm = () => (
-    <div className="space-y-4">
-      {editingRecordId && (
-        <div className="bg-amber-100 border border-amber-300 text-amber-900 px-3 py-1.5 rounded-xl flex items-center justify-between text-xs">
-          <span className="font-semibold flex items-center gap-1">
-            <Edit3 className="w-3.5 h-3.5 text-amber-600" /> 正在編輯 {targetRecordDate} 的記事
-          </span>
-          <button onClick={handleCancelEdit} className="text-amber-700 hover:text-amber-900 p-0.5">
-            <X className="w-4 h-4" />
-          </button>
-        </div>
-      )}
+  // 📝 編輯表單：支援多張照片預覽、切換與標籤
+  const renderEditorForm = () => {
+    const currentActivePhoto = stagedPhotos[activePhotoIndex] || stagedPhotos[0];
 
-      <div>
-        <div className="flex items-center justify-between mb-1.5">
-          <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
-            記錄日期 (可補登)
-          </label>
-          {targetRecordDate !== todayStr && (
-            <button type="button" onClick={() => setTargetRecordDate(todayStr)} className="text-[11px] text-blue-600 hover:underline">
-              切換為今天
-            </button>
-          )}
-        </div>
-        <div className="flex items-center gap-2 bg-slate-50 p-2 rounded-xl border border-slate-200">
-          <CalendarIcon className="w-4 h-4 text-blue-500 ml-1" />
-          <input
-            type="date"
-            value={targetRecordDate}
-            onChange={(e) => setTargetRecordDate(e.target.value)}
-            className="bg-transparent text-xs font-semibold text-slate-800 outline-none w-full cursor-pointer"
-          />
-        </div>
-      </div>
-
-      <div>
-        <div className="flex items-center justify-between mb-1.5">
-          <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
-            記事分類
-          </label>
-          <button
-            type="button"
-            onClick={handleAddNewCategory}
-            className="text-[11px] text-blue-600 hover:text-blue-700 font-medium flex items-center gap-0.5"
-          >
-            <Plus className="w-3 h-3" /> 自訂新分類
-          </button>
-        </div>
-        <div className="flex flex-wrap gap-1.5">
-          {categories.map((cat) => {
-            const isSelected = selectedCategory === cat.id;
-            return (
-              <button
-                key={cat.id}
-                type="button"
-                onClick={() => setSelectedCategory(cat.id)}
-                className={`px-2.5 py-1.5 rounded-lg text-xs font-medium transition border flex items-center gap-1 group ${
-                  isSelected
-                    ? 'bg-blue-600 text-white border-blue-600 shadow-sm font-semibold scale-105'
-                    : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'
-                }`}
-              >
-                <span>{cat.icon}</span>
-                <span>{cat.label}</span>
-                {cat.isCustom && (
-                  <span
-                    onClick={(e) => handleDeleteCategory(cat.id, e)}
-                    className="ml-0.5 opacity-60 hover:opacity-100 text-slate-400 hover:text-rose-500"
-                    title="刪除此分類"
-                  >
-                    ×
-                  </span>
-                )}
-              </button>
-            );
-          })}
-        </div>
-      </div>
-
-      <div>
-        <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider block mb-2">當日心情</label>
-        <div className="grid grid-cols-5 gap-1 bg-slate-50 p-1.5 rounded-xl border border-slate-200">
-          {MOODS.map((m) => {
-            const IconComponent = m.icon;
-            const isSelected = selectedMood === m.level;
-            return (
-              <button
-                key={m.level}
-                type="button"
-                onClick={() => setSelectedMood(m.level)}
-                className={`flex flex-col items-center py-1.5 rounded-lg text-xs ${
-                  isSelected ? 'bg-white shadow text-slate-900 font-bold scale-105' : 'text-slate-400 hover:text-slate-600'
-                }`}
-              >
-                <IconComponent className={`w-4 h-4 mb-0.5 ${isSelected ? m.color.split(' ')[0] : ''}`} />
-                <span className="text-[10px]">{m.label}</span>
-              </button>
-            );
-          })}
-        </div>
-      </div>
-
-      {/* 相片紀錄：移除 capture="environment"，支援自由選取相簿或拍照 */}
-      <div>
-        <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider block mb-1.5">相片紀錄</label>
-        {!stagedPhoto ? (
-          <label className="flex flex-col items-center justify-center border-2 border-dashed border-slate-300 rounded-xl p-3.5 cursor-pointer hover:border-blue-400 bg-slate-50 transition-colors">
-            <Camera className="w-5 h-5 text-slate-400 mb-1" />
-            <span className="text-xs text-slate-500">選取相簿相片或拍照</span>
-            <input type="file" accept="image/*" className="hidden" onChange={handlePhotoUpload} />
-          </label>
-        ) : (
-          <div className="relative border border-slate-200 rounded-xl overflow-hidden bg-black/5">
-            <div className="relative cursor-crosshair" onClick={handleImageClick}>
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src={stagedPhoto.previewUrl} alt="預覽" className="w-full h-40 object-cover select-none" />
-              {stagedPhoto.tags.map((tag) => (
-                <div key={tag.id} style={{ top: `${tag.yPercent}%`, left: `${tag.xPercent}%` }} className="absolute -translate-x-1/2 -translate-y-1/2 bg-black/75 backdrop-blur text-white text-[10px] px-2 py-0.5 rounded-full pointer-events-none flex items-center gap-1">
-                  <MapPin className="w-2.5 h-2.5 text-amber-400" />
-                  {tag.caption}
-                </div>
-              ))}
-            </div>
-            {pendingTagPos && (
-              <div className="p-2 bg-white border-t border-slate-200 flex gap-1.5">
-                <input type="text" placeholder="留一句話..." value={tempTagCaption} onChange={(e) => setTempTagCaption(e.target.value)} className="text-xs flex-1 border rounded px-2 py-1 outline-none" autoFocus />
-                <button onClick={addTagToPhoto} className="bg-blue-600 text-white text-xs px-2.5 py-1 rounded">標記</button>
-              </div>
-            )}
-            <button onClick={() => setStagedPhoto(null)} className="absolute top-2 right-2 bg-white/80 p-1 rounded-full text-rose-600 shadow">
-              <Trash2 className="w-3.5 h-3.5" />
+    return (
+      <div className="space-y-4">
+        {editingRecordId && (
+          <div className="bg-amber-100 border border-amber-300 text-amber-900 px-3 py-1.5 rounded-xl flex items-center justify-between text-xs">
+            <span className="font-semibold flex items-center gap-1">
+              <Edit3 className="w-3.5 h-3.5 text-amber-600" /> 正在編輯 {targetRecordDate} 的記事
+            </span>
+            <button onClick={handleCancelEdit} className="text-amber-700 hover:text-amber-900 p-0.5">
+              <X className="w-4 h-4" />
             </button>
           </div>
         )}
-      </div>
 
-      <div>
-        <textarea
-          rows={3}
-          placeholder="記錄該日的心情隨筆..."
-          value={note}
-          onChange={(e) => setNote(e.target.value)}
-          className="w-full text-xs border border-slate-200 rounded-xl p-3 outline-none focus:ring-2 focus:ring-blue-500/20 resize-none bg-slate-50"
-        />
-      </div>
+        <div>
+          <div className="flex items-center justify-between mb-1.5">
+            <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
+              記錄日期 (可補登)
+            </label>
+            {targetRecordDate !== todayStr && (
+              <button type="button" onClick={() => setTargetRecordDate(todayStr)} className="text-[11px] text-blue-600 hover:underline">
+                切換為今天
+              </button>
+            )}
+          </div>
+          <div className="flex items-center gap-2 bg-slate-50 p-2 rounded-xl border border-slate-200">
+            <CalendarIcon className="w-4 h-4 text-blue-500 ml-1" />
+            <input
+              type="date"
+              value={targetRecordDate}
+              onChange={(e) => setTargetRecordDate(e.target.value)}
+              className="bg-transparent text-xs font-semibold text-slate-800 outline-none w-full cursor-pointer"
+            />
+          </div>
+        </div>
 
-      <div className="flex gap-2 pb-1">
-        {editingRecordId && (
-          <button type="button" onClick={handleCancelEdit} className="flex-1 bg-slate-200 text-slate-700 py-2.5 rounded-xl text-xs font-semibold">
-            取消
+        <div>
+          <div className="flex items-center justify-between mb-1.5">
+            <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
+              記事分類
+            </label>
+            <button
+              type="button"
+              onClick={handleAddNewCategory}
+              className="text-[11px] text-blue-600 hover:text-blue-700 font-medium flex items-center gap-0.5"
+            >
+              <Plus className="w-3 h-3" /> 自訂新分類
+            </button>
+          </div>
+          <div className="flex flex-wrap gap-1.5">
+            {categories.map((cat) => {
+              const isSelected = selectedCategory === cat.id;
+              return (
+                <button
+                  key={cat.id}
+                  type="button"
+                  onClick={() => setSelectedCategory(cat.id)}
+                  className={`px-2.5 py-1.5 rounded-lg text-xs font-medium transition border flex items-center gap-1 group ${
+                    isSelected
+                      ? 'bg-blue-600 text-white border-blue-600 shadow-sm font-semibold scale-105'
+                      : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'
+                  }`}
+                >
+                  <span>{cat.icon}</span>
+                  <span>{cat.label}</span>
+                  {cat.isCustom && (
+                    <span
+                      onClick={(e) => handleDeleteCategory(cat.id, e)}
+                      className="ml-0.5 opacity-60 hover:opacity-100 text-slate-400 hover:text-rose-500"
+                      title="刪除此分類"
+                    >
+                      ×
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        <div>
+          <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider block mb-2">當日心情</label>
+          <div className="grid grid-cols-5 gap-1 bg-slate-50 p-1.5 rounded-xl border border-slate-200">
+            {MOODS.map((m) => {
+              const IconComponent = m.icon;
+              const isSelected = selectedMood === m.level;
+              return (
+                <button
+                  key={m.level}
+                  type="button"
+                  onClick={() => setSelectedMood(m.level)}
+                  className={`flex flex-col items-center py-1.5 rounded-lg text-xs ${
+                    isSelected ? 'bg-white shadow text-slate-900 font-bold scale-105' : 'text-slate-400 hover:text-slate-600'
+                  }`}
+                >
+                  <IconComponent className={`w-4 h-4 mb-0.5 ${isSelected ? m.color.split(' ')[0] : ''}`} />
+                  <span className="text-[10px]">{m.label}</span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* 📸 多照片上傳與預覽縮圖區 */}
+        <div>
+          <div className="flex items-center justify-between mb-1.5">
+            <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
+              相片紀錄 ({stagedPhotos.length}/{MAX_PHOTOS_PER_ENTRY})
+            </label>
+            {stagedPhotos.length > 0 && stagedPhotos.length < MAX_PHOTOS_PER_ENTRY && (
+              <label className="text-[11px] text-blue-600 hover:underline cursor-pointer flex items-center gap-0.5">
+                <Plus className="w-3 h-3" /> 加選相片
+                <input type="file" accept="image/*" multiple className="hidden" onChange={handlePhotosUpload} />
+              </label>
+            )}
+          </div>
+
+          {stagedPhotos.length === 0 ? (
+            <label className="flex flex-col items-center justify-center border-2 border-dashed border-slate-300 rounded-xl p-4 cursor-pointer hover:border-blue-400 bg-slate-50 transition-colors">
+              <Images className="w-6 h-6 text-slate-400 mb-1" />
+              <span className="text-xs text-slate-600 font-medium">選取相簿照片或拍照</span>
+              <span className="text-[10px] text-slate-400 mt-0.5">支援長按多選，最多 {MAX_PHOTOS_PER_ENTRY} 張</span>
+              <input type="file" accept="image/*" multiple className="hidden" onChange={handlePhotosUpload} />
+            </label>
+          ) : (
+            <div className="space-y-2">
+              {/* 當前焦點照片 (可點擊新增文字標籤) */}
+              {currentActivePhoto && (
+                <div className="relative border border-slate-200 rounded-xl overflow-hidden bg-black/5">
+                  <div className="relative cursor-crosshair" onClick={handleImageClick}>
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img 
+                      src={currentActivePhoto.previewUrl} 
+                      alt="主圖預覽" 
+                      className="w-full h-44 object-cover select-none" 
+                    />
+                    {currentActivePhoto.tags?.map((tag) => (
+                      <div 
+                        key={tag.id} 
+                        style={{ top: `${tag.yPercent}%`, left: `${tag.xPercent}%` }} 
+                        className="absolute -translate-x-1/2 -translate-y-1/2 bg-black/75 backdrop-blur text-white text-[10px] px-2 py-0.5 rounded-full pointer-events-none flex items-center gap-1 shadow-md"
+                      >
+                        <MapPin className="w-2.5 h-2.5 text-amber-400" />
+                        {tag.caption}
+                      </div>
+                    ))}
+                  </div>
+
+                  {pendingTagPos && (
+                    <div className="p-2 bg-white border-t border-slate-200 flex gap-1.5">
+                      <input 
+                        type="text" 
+                        placeholder="留下當前照片標籤..." 
+                        value={tempTagCaption} 
+                        onChange={(e) => setTempTagCaption(e.target.value)} 
+                        className="text-xs flex-1 border rounded px-2 py-1 outline-none" 
+                        autoFocus 
+                      />
+                      <button onClick={addTagToPhoto} className="bg-blue-600 text-white text-xs px-2.5 py-1 rounded">標記</button>
+                    </div>
+                  )}
+
+                  <button 
+                    onClick={() => handleRemovePhoto(currentActivePhoto.id)} 
+                    className="absolute top-2 right-2 bg-white/80 p-1 rounded-full text-rose-600 shadow hover:bg-white"
+                    title="刪除這張照片"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              )}
+
+              {/* 多圖水平縮圖切換列 */}
+              <div className="flex items-center gap-2 overflow-x-auto pb-1 pt-0.5">
+                {stagedPhotos.map((photo, index) => {
+                  const isActive = index === activePhotoIndex;
+                  return (
+                    <div
+                      key={photo.id}
+                      onClick={() => {
+                        setActivePhotoIndex(index);
+                        setPendingTagPos(null);
+                      }}
+                      className={`relative shrink-0 w-14 h-14 rounded-lg overflow-hidden cursor-pointer border-2 transition-all ${
+                        isActive ? 'border-blue-600 ring-2 ring-blue-500/20 scale-105' : 'border-slate-200 opacity-70 hover:opacity-100'
+                      }`}
+                    >
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img src={photo.previewUrl} alt={`縮圖 ${index + 1}`} className="w-full h-full object-cover" />
+                      {photo.tags && photo.tags.length > 0 && (
+                        <span className="absolute bottom-0 right-0 bg-black/60 text-[9px] text-amber-300 px-1 rounded-tl">
+                          🏷️{photo.tags.length}
+                        </span>
+                      )}
+                    </div>
+                  );
+                })}
+
+                {stagedPhotos.length < MAX_PHOTOS_PER_ENTRY && (
+                  <label className="shrink-0 w-14 h-14 rounded-lg border-2 border-dashed border-slate-300 flex flex-col items-center justify-center cursor-pointer hover:border-blue-400 bg-slate-50 transition-colors">
+                    <Plus className="w-4 h-4 text-slate-400" />
+                    <span className="text-[9px] text-slate-400">加圖</span>
+                    <input type="file" accept="image/*" multiple className="hidden" onChange={handlePhotosUpload} />
+                  </label>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+
+        <div>
+          <textarea
+            rows={3}
+            placeholder="記錄該日的心情隨筆..."
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            className="w-full text-xs border border-slate-200 rounded-xl p-3 outline-none focus:ring-2 focus:ring-blue-500/20 resize-none bg-slate-50"
+          />
+        </div>
+
+        <div className="flex gap-2 pb-1">
+          {editingRecordId && (
+            <button type="button" onClick={handleCancelEdit} className="flex-1 bg-slate-200 text-slate-700 py-2.5 rounded-xl text-xs font-semibold">
+              取消
+            </button>
+          )}
+          <button
+            onClick={handleSubmit}
+            className={`flex-1 text-white py-2.5 rounded-xl flex items-center justify-center gap-1.5 shadow text-xs font-semibold ${
+              editingRecordId ? 'bg-amber-600 hover:bg-amber-700' : 'bg-blue-600 hover:bg-blue-700'
+            }`}
+          >
+            {editingRecordId ? <><Check className="w-3.5 h-3.5" /> 儲存修改</> : <><Send className="w-3.5 h-3.5" /> 儲存記錄至 {targetRecordDate}</>}
           </button>
-        )}
-        <button
-          onClick={handleSubmit}
-          className={`flex-1 text-white py-2.5 rounded-xl flex items-center justify-center gap-1.5 shadow text-xs font-semibold ${
-            editingRecordId ? 'bg-amber-600 hover:bg-amber-700' : 'bg-blue-600 hover:bg-blue-700'
-          }`}
-        >
-          {editingRecordId ? <><Check className="w-3.5 h-3.5" /> 儲存修改</> : <><Send className="w-3.5 h-3.5" /> 儲存記錄至 {targetRecordDate}</>}
-        </button>
+        </div>
       </div>
-    </div>
-  );
+    );
+  };
+
+  // 🖼️ 時間軸多圖排版渲染元件 (支援 1張 / 2張 / 3張 / 4張以上 拼圖佈局)
+  const renderEntryPhotosGrid = (photos: PhotoData[]) => {
+    if (!photos || photos.length === 0) return null;
+
+    const count = photos.length;
+
+    // 單張照片
+    if (count === 1) {
+      const p = photos[0];
+      const src = p.previewUrl || (p.blob ? URL.createObjectURL(p.blob) : '');
+      return (
+        <div className="relative rounded-xl overflow-hidden mb-3 border border-slate-100 bg-slate-950">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src={src} alt="記錄照片" className="w-full max-h-96 object-cover" />
+          {p.tags?.map((tag) => (
+            <div key={tag.id} style={{ top: `${tag.yPercent}%`, left: `${tag.xPercent}%` }} className="absolute -translate-x-1/2 -translate-y-1/2 bg-black/70 backdrop-blur-md text-white text-xs px-2.5 py-1 rounded-full shadow-lg border border-white/20 flex items-center gap-1.5">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+              {tag.caption}
+            </div>
+          ))}
+        </div>
+      );
+    }
+
+    // 2 張照片 (5:5 左右並排)
+    if (count === 2) {
+      return (
+        <div className="grid grid-cols-2 gap-1.5 mb-3 rounded-xl overflow-hidden">
+          {photos.map((p, idx) => {
+            const src = p.previewUrl || (p.blob ? URL.createObjectURL(p.blob) : '');
+            return (
+              <div key={p.id || idx} className="relative h-48 bg-slate-900 overflow-hidden">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src={src} alt={`照片 ${idx + 1}`} className="w-full h-full object-cover" />
+                {p.tags?.[0] && (
+                  <div className="absolute bottom-2 left-2 bg-black/70 backdrop-blur-sm text-white text-[10px] px-2 py-0.5 rounded-md">
+                    {p.tags[0].caption}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      );
+    }
+
+    // 3 張照片 (左 1 大、右 2 小)
+    if (count === 3) {
+      const p0Src = photos[0].previewUrl || (photos[0].blob ? URL.createObjectURL(photos[0].blob) : '');
+      return (
+        <div className="grid grid-cols-3 gap-1.5 mb-3 rounded-xl overflow-hidden h-56">
+          <div className="col-span-2 relative bg-slate-900 h-full">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src={p0Src} alt="主要照片" className="w-full h-full object-cover" />
+          </div>
+          <div className="col-span-1 grid grid-rows-2 gap-1.5 h-full">
+            {photos.slice(1, 3).map((p, idx) => {
+              const src = p.previewUrl || (p.blob ? URL.createObjectURL(p.blob) : '');
+              return (
+                <div key={p.id || idx} className="relative bg-slate-900 h-full overflow-hidden">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src={src} alt={`照片 ${idx + 2}`} className="w-full h-full object-cover" />
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      );
+    }
+
+    // 4 張及以上 (2x2 網格，若超過 4 張則在第 4 張疊加「+N」遮罩)
+    const displayPhotos = photos.slice(0, 4);
+    const extraCount = count - 4;
+
+    return (
+      <div className="grid grid-cols-2 gap-1.5 mb-3 rounded-xl overflow-hidden">
+        {displayPhotos.map((p, idx) => {
+          const src = p.previewUrl || (p.blob ? URL.createObjectURL(p.blob) : '');
+          const isLast = idx === 3 && extraCount > 0;
+          return (
+            <div key={p.id || idx} className="relative h-36 bg-slate-900 overflow-hidden">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={src} alt={`照片 ${idx + 1}`} className="w-full h-full object-cover" />
+              {isLast && (
+                <div className="absolute inset-0 bg-black/60 backdrop-blur-[2px] flex items-center justify-center text-white text-base font-bold">
+                  +{extraCount}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    );
+  };
 
   // ──────────────── 🔒 門禁鎖定畫面 ────────────────
   if (!isAuthenticated && !authChecking) {
@@ -1086,18 +1300,8 @@ export default function MindLogPage() {
                     </div>
                   </div>
 
-                  {record.photos && record.photos.length > 0 && record.photos[0].blob && (
-                    <div className="relative rounded-xl overflow-hidden mb-3 border border-slate-100 bg-slate-950">
-                      {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img src={URL.createObjectURL(record.photos[0].blob)} alt="記錄照片" className="w-full max-h-96 object-cover" />
-                      {record.photos[0].tags?.map((tag) => (
-                        <div key={tag.id} style={{ top: `${tag.yPercent}%`, left: `${tag.xPercent}%` }} className="absolute -translate-x-1/2 -translate-y-1/2 bg-black/75 backdrop-blur-md text-white text-xs px-2.5 py-1 rounded-full shadow-lg border border-white/20 flex items-center gap-1.5">
-                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                          {tag.caption}
-                        </div>
-                      ))}
-                    </div>
-                  )}
+                  {/* 多照片自適應 Grid 呈現 */}
+                  {record.photos && record.photos.length > 0 && renderEntryPhotosGrid(record.photos)}
 
                   {record.note && (
                     <p className="text-sm md:text-[15px] text-slate-700 leading-relaxed whitespace-pre-line">
@@ -1107,7 +1311,7 @@ export default function MindLogPage() {
 
                   <div className="mt-3 pt-2 border-t border-slate-100 flex items-center justify-between text-[11px] text-slate-400">
                     <span>紀錄日期：{record.dateStr}{record.updatedAt && ' (已編輯)'}</span>
-                    <span>歸檔完整</span>
+                    <span>歸檔完整 {record.photos && record.photos.length > 0 && `(${record.photos.length} 張相片)`}</span>
                   </div>
                 </article>
               );
